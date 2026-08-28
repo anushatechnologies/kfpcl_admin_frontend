@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>KFPL All Pages Backend API Handoff</title>
+<style>body{font-family:Arial,sans-serif;color:#172033;line-height:1.42;margin:38px}h1{color:#1d4ed8;border-bottom:3px solid #1d4ed8;padding-bottom:10px}h2{color:#1e40af;border-bottom:1px solid #bfdbfe;padding-bottom:5px;margin-top:30px}h3{color:#334155;margin-top:22px}h4{color:#475569;margin-bottom:5px}table{border-collapse:collapse;width:100%;margin:10px 0 18px}th{background:#1e3a8a;color:#fff;text-align:left}th,td{border:1px solid #cbd5e1;padding:7px;vertical-align:top}pre{font-family:Consolas,monospace;background:#f1f5f9;border:1px solid #cbd5e1;padding:10px;white-space:pre-wrap}code{font-family:Consolas,monospace}.note{background:#eff6ff;border-left:4px solid #2563eb;padding:10px}.warn{background:#fff7ed;border-left:4px solid #f97316;padding:10px}.small{font-size:11px;color:#475569}</style></head><body>
+<h1>KFPL B2B Marketplace — Complete Backend API Handoff</h1>
+<p><b>Audience:</b> Backend/API development team</p><p><b>Purpose:</b> Define the API flow for every current Buyer, Supplier, Admin, Authentication, Messaging, Catalog, Order, RFQ, Payment, Inventory, Review, Support, Notification, Analytics, and Profile page.</p>
+<div class="note"><b>Core relationship:</b><br>Users create or browse Products. Buyers create RFQs. Suppliers submit Quotations. Buyers accept quotations and create Orders. Admins govern users, catalog, orders, inventory, payments, reviews, support, and notifications.</div>
+
+<h2>1. API conventions</h2>
+<pre>Base URL: /api/v1
+Admin URL: /api/v1/admin
+Buyer URL: /api/v1/buyer
+Supplier URL: /api/v1/supplier
+Shared URL: /api/v1</pre>
+<p>Every protected request uses:</p><pre>Authorization: Bearer &lt;access_token&gt;
+Content-Type: application/json</pre>
+<table><tr><th>HTTP status</th><th>Meaning</th></tr><tr><td>200</td><td>Successful read/update</td></tr><tr><td>201</td><td>Successful create</td></tr><tr><td>204</td><td>Successful delete/archive with no body</td></tr><tr><td>400</td><td>Validation error</td></tr><tr><td>401</td><td>Missing/expired token</td></tr><tr><td>403</td><td>Insufficient permission</td></tr><tr><td>404</td><td>Resource not found</td></tr><tr><td>409</td><td>Duplicate/conflicting resource</td></tr><tr><td>422</td><td>Business rule violation</td></tr><tr><td>500</td><td>Unexpected server error</td></tr></table>
+<p>List APIs should support <code>page</code>, <code>limit</code>, <code>search</code>, filters, sorting, and return a pagination object.</p>
+<pre>{"success":true,"data":[],"pagination":{"page":1,"limit":20,"total":0,"totalPages":0}}</pre>
+<p>Use UTC ISO timestamps. Store currency amounts in minor units or fixed decimal numeric columns. Prefer soft delete/archive for business records. Add audit logs for admin mutations.</p>
+
+<h2>2. Authentication, onboarding, and session flow</h2>
+<h3>2.1 Send OTP / verify phone</h3><pre>POST /api/v1/auth/otp/send
+POST /api/v1/auth/otp/verify</pre>
+<pre>POST /api/v1/auth/otp/send
+{"phone":"+919876543210","purpose":"LOGIN"}
+
+POST /api/v1/auth/otp/verify
+{"phone":"+919876543210","otp":"123456","deviceId":"device_123"}</pre>
+<p>Verify OTP, create or locate the user, issue access and refresh tokens, and return whether onboarding is complete.</p>
+<h3>2.2 Login, logout, refresh</h3><pre>POST /api/v1/auth/login
+POST /api/v1/auth/refresh
+POST /api/v1/auth/logout
+GET  /api/v1/auth/me</pre>
+<h3>2.3 Onboarding</h3><pre>POST /api/v1/onboarding/profile
+PATCH /api/v1/users/me
+POST /api/v1/users/me/gst/verify
+POST /api/v1/users/me/documents
+GET  /api/v1/users/me/onboarding-status</pre>
+<p>Profile fields include name, phone, email, companyName, businessType, activeRole, GST number, location, address, avatar, KYC status, and language.</p>
+<h3>2.4 Role switch</h3><pre>PATCH /api/v1/users/me/active-role
+{"activeRole":"BUYER"}</pre>
+<p>Allowed roles: BUYER, SUPPLIER, or BUYER_SUPPLIER depending on the account permissions.</p>
+
+<h2>3. Shared user/profile APIs</h2>
+<pre>GET   /api/v1/users/me
+PATCH /api/v1/users/me
+POST  /api/v1/users/me/avatar
+GET   /api/v1/users/me/addresses
+POST  /api/v1/users/me/addresses
+PATCH /api/v1/users/me/addresses/:addressId
+DELETE /api/v1/users/me/addresses/:addressId
+PATCH /api/v1/users/me/preferences
+GET   /api/v1/users/me/notifications</pre>
+<p>Validate email, phone, GST, address, and avatar. Do not allow a user to update KYC status or financial balances directly.</p>
+
+<h2>4. Catalog and product APIs</h2>
+<h3>4.1 Catalog hierarchy</h3><pre>Category
+  └── Subcategory
+        └── Product</pre>
+<p>Category and Subcategory are separate resources. Product creation must reference both IDs.</p>
+<h3>4.2 Images</h3><pre>POST /api/v1/admin/catalog/images
+Content-Type: multipart/form-data
+Fields: file, type=CATEGORY|SUBCATEGORY|PRODUCT</pre>
+<h3>4.3 Categories</h3><pre>GET    /api/v1/admin/catalog/categories
+POST   /api/v1/admin/catalog/categories
+GET    /api/v1/admin/catalog/categories/:categoryId
+PATCH  /api/v1/admin/catalog/categories/:categoryId
+DELETE /api/v1/admin/catalog/categories/:categoryId</pre>
+<p>Category create payload:</p><pre>{"name":"Dairy, Bread &amp; Eggs","imageUrl":"https://cdn/.../dairy.jpg","description":"Fresh dairy products","displayOrder":1,"discount":5,"isActive":true}</pre>
+<p>Category name and image are mandatory. Description, displayOrder, discount, and isActive are stored and editable.</p>
+<h3>4.4 Subcategories</h3><pre>GET    /api/v1/admin/catalog/subcategories
+POST   /api/v1/admin/catalog/subcategories
+GET    /api/v1/admin/catalog/categories/:categoryId/subcategories
+GET    /api/v1/admin/catalog/subcategories/:subcategoryId
+PATCH  /api/v1/admin/catalog/subcategories/:subcategoryId
+DELETE /api/v1/admin/catalog/subcategories/:subcategoryId</pre>
+<p>Subcategory create payload:</p><pre>{"categoryId":"cat_dairy","name":"Milk","imageUrl":"https://cdn/.../milk.jpg","description":"Toned and full cream milk","displayOrder":1,"discount":3,"isActive":true}</pre>
+<p>Subcategory name and image are mandatory. The selected category must exist and be active.</p>
+<h3>4.5 Products</h3><pre>GET    /api/v1/catalog/products
+GET    /api/v1/catalog/products/:productId
+GET    /api/v1/admin/catalog/products
+POST   /api/v1/admin/catalog/products
+PATCH  /api/v1/admin/catalog/products/:productId
+DELETE /api/v1/admin/catalog/products/:productId</pre>
+<p>Product create payload:</p><pre>{
+  "productName":"Amul Taaza Milk",
+  "categoryId":"cat_dairy",
+  "subcategoryId":"sub_milk",
+  "brand":"Amul",
+  "description":"Fresh toned milk",
+  "imageUrl":"https://cdn/.../amul-milk.jpg",
+  "price":30,
+  "mrp":32,
+  "quantity":500,
+  "unit":"ml",
+  "stockQuantity":50,
+  "status":"ACTIVE",
+  "sku":"AML-MILK-500"
+}</pre>
+<p>Product rules: category and subcategory must be active and related; SKU must be unique; price must be greater than zero; MRP must be greater than or equal to price; unit must be ml, g, kg, or piece; stock must be non-negative; discount should be calculated by the server.</p>
+<pre>discountPercentage = ((mrp - price) / mrp) * 100</pre>
+<h3>4.6 Product listing filters</h3><pre>GET /api/v1/admin/catalog/products?search=milk&amp;categoryId=cat_dairy&amp;subcategoryId=sub_milk&amp;stockStatus=IN_STOCK&amp;status=ACTIVE&amp;page=1&amp;limit=20</pre>
+<p>Products page should return image, product name, category, subcategory, brand, price, stock, status, and actions. Buyer product listing should hide drafts, archived items, and inactive catalog nodes.</p>
+
+<h2>5. Buyer application pages</h2>
+<h3>5.1 Buyer Home</h3><pre>GET /api/v1/buyer/home
+GET /api/v1/catalog/categories?isActive=true
+GET /api/v1/catalog/products?featured=true
+GET /api/v1/buyer/recommendations</pre>
+<p>Return category cards, featured products, recently viewed products, verified suppliers, and buyer-specific recommendations.</p>
+<h3>5.2 Explore/Search</h3><pre>GET /api/v1/catalog/products
+  ?search=&amp;categoryId=&amp;minPrice=&amp;maxPrice=&amp;moqMax=&amp;location=&amp;gstVerified=&amp;verifiedSupplier=&amp;sortBy=&amp;page=&amp;limit=</pre>
+<p>Supported sorting: relevance, price_low, price_high, rating, and MOQ. Return product cards with image, title, brand, supplier, rating, price tiers, MOQ, stock availability, and wishlist state.</p>
+<h3>5.3 Product detail</h3><pre>GET  /api/v1/catalog/products/:productId
+POST /api/v1/buyer/products/:productId/view
+POST /api/v1/buyer/wishlist/:productId
+DELETE /api/v1/buyer/wishlist/:productId
+GET  /api/v1/buyer/wishlist</pre>
+<p>Product detail returns images, description, specifications, price tiers, supplier verification, rating, stock, and related products.</p>
+<h3>5.4 Buyer RFQ Desk</h3><pre>GET /api/v1/buyer/rfqs
+GET /api/v1/buyer/rfqs/:rfqId
+POST /api/v1/buyer/rfqs
+PATCH /api/v1/buyer/rfqs/:rfqId/cancel
+GET /api/v1/buyer/rfqs/:rfqId/quotations</pre>
+<p>Create RFQ payload:</p><pre>{"productId":"prod_123","productTitle":"Amul Taaza Milk","categoryId":"cat_dairy","quantity":50,"unit":"piece","targetPrice":28,"expectedDeliveryDate":"2026-09-01","description":"Need regular supply","attachments":[]}</pre>
+<p>RFQ statuses: OPEN, QUOTED, ACCEPTED, EXPIRED, REJECTED. Creating an RFQ should notify eligible suppliers.</p>
+<h3>5.5 RFQ comparison and quotation acceptance</h3><pre>GET  /api/v1/buyer/rfqs/:rfqId/quotations/compare
+POST /api/v1/buyer/rfqs/:rfqId/quotations/:quotationId/accept
+POST /api/v1/buyer/rfqs/:rfqId/quotations/:quotationId/reject</pre>
+<p>Accepting a quotation should be transactional and should create an order or return a payment/order creation token, depending on the checkout design.</p>
+<h3>5.6 Buyer Orders</h3><pre>GET /api/v1/buyer/orders?status=ALL|SHIPPED|DELIVERED|CANCELLED
+GET /api/v1/buyer/orders/:orderId
+POST /api/v1/buyer/orders/:orderId/cancel
+POST /api/v1/buyer/orders/:orderId/confirm-delivery
+GET /api/v1/buyer/orders/:orderId/tracking</pre>
+<p>Return order number, product image, supplier, quantity, unit price, total amount, order date, status, payment status, delivery address, and tracking information.</p>
+
+<h2>6. Supplier application pages</h2>
+<h3>6.1 Supplier Dashboard</h3><pre>GET /api/v1/supplier/dashboard
+GET /api/v1/supplier/analytics/summary
+GET /api/v1/supplier/products?limit=5
+GET /api/v1/supplier/rfqs?status=OPEN&amp;limit=5
+GET /api/v1/supplier/orders?limit=5</pre>
+<p>Dashboard metrics: today leads, today revenue, today orders, visitors, performance score, sales history, and top products.</p>
+<h3>6.2 Supplier Products</h3><pre>GET    /api/v1/supplier/products
+POST   /api/v1/supplier/products
+GET    /api/v1/supplier/products/:productId
+PATCH  /api/v1/supplier/products/:productId
+DELETE /api/v1/supplier/products/:productId</pre>
+<p>Supplier product create includes title, category, subcategory, brand, images, description, MOQ, unit, tierPricing, stock, specifications, supplier location, GST verification, and status. New products should enter PENDING approval when platform governance requires approval.</p>
+<pre>{"title":"Servo Motor","categoryId":"cat_machinery","subcategoryId":"sub_motors","brand":"Apex","images":[],"description":"Industrial motor","moq":10,"unit":"piece","tierPricing":[{"minQty":10,"maxQty":49,"pricePerUnit":120},{"minQty":50,"maxQty":null,"pricePerUnit":95}],"stock":500,"status":"DRAFT"}</pre>
+<h3>6.3 Supplier Leads/RFQs</h3><pre>GET  /api/v1/supplier/leads
+GET  /api/v1/supplier/leads/:rfqId
+POST /api/v1/supplier/leads/:rfqId/quotation
+GET  /api/v1/supplier/quotations
+PATCH /api/v1/supplier/quotations/:quotationId</pre>
+<p>Quotation payload:</p><pre>{"rfqId":"rfq_123","unitPrice":28,"totalPrice":1400,"moq":50,"estimatedDeliveryDays":5,"shippingCost":100,"gstPercent":18,"notes":"Dispatch within 48 hours","validUntil":"2026-08-31"}</pre>
+<p>Quotation statuses: PENDING, ACCEPTED, REJECTED. A supplier can quote only an open RFQ.</p>
+
+<h2>7. Chat and messaging pages</h2>
+<pre>GET  /api/v1/conversations
+POST /api/v1/conversations
+GET  /api/v1/conversations/:conversationId/messages?cursor=
+POST /api/v1/conversations/:conversationId/messages
+POST /api/v1/conversations/:conversationId/read
+POST /api/v1/conversations/:conversationId/attachments</pre>
+<p>Message types: TEXT, PRODUCT_CARD, QUOTATION_CARD, IMAGE, DOCUMENT. Validate that the sender belongs to the conversation. Use WebSocket events for realtime delivery if required:</p><pre>conversation.message.created
+conversation.message.read
+conversation.typing</pre>
+
+<h2>8. Order, checkout, payment, and escrow flow</h2>
+<h3>8.1 Order creation</h3><pre>POST /api/v1/orders
+GET  /api/v1/orders/:orderId
+GET  /api/v1/orders/:orderId/timeline</pre>
+<p>Order creation is normally triggered by an accepted quotation.</p><pre>{"rfqId":"rfq_123","quotationId":"quote_123","items":[{"productId":"prod_123","quantity":50}],"deliveryAddressId":"addr_123","paymentMethod":"ONLINE"}</pre>
+<h3>8.2 Payment</h3><pre>POST /api/v1/payments/create-intent
+POST /api/v1/payments/:paymentId/confirm
+POST /api/v1/payments/webhook
+GET  /api/v1/payments/:paymentId
+GET  /api/v1/orders/:orderId/payment</pre>
+<p>Use idempotency keys on payment and order creation. Never mark a payment successful from the frontend; rely on the payment provider webhook.</p>
+<h3>8.3 Order status lifecycle</h3><pre>PENDING → CONFIRMED → PROCESSING → SHIPPED → DELIVERED
+Any eligible state → CANCELLED</pre>
+<p>Supplier/admin actions:</p><pre>PATCH /api/v1/supplier/orders/:orderId/status
+PATCH /api/v1/admin/orders/:orderId/status
+POST  /api/v1/orders/:orderId/tracking</pre>
+<p>Order payment statuses: PAID, PENDING, ESCROW_HOLD. Release escrow only after the configured delivery/return condition.</p>
+
+<h2>9. Admin pages</h2>
+<h3>9.1 Admin authentication</h3><pre>POST /api/v1/admin/auth/login
+POST /api/v1/admin/auth/logout
+POST /api/v1/admin/auth/refresh
+GET  /api/v1/admin/auth/me</pre>
+<p>Admin roles include Super Admin, Catalog Manager, Order &amp; Escrow Lead, Finance Admin, and Support Lead. Enforce server-side module permissions.</p>
+<h3>9.2 Admin Dashboard</h3><pre>GET /api/v1/admin/dashboard/summary
+GET /api/v1/admin/dashboard/sales-overview
+GET /api/v1/admin/dashboard/order-status-breakdown
+GET /api/v1/admin/dashboard/top-regions
+GET /api/v1/admin/dashboard/latest-sales</pre>
+<p>Return KPI cards, sales chart series, regional sales, order status counts, latest sales, revenue, users, pending approvals, and inventory alerts.</p>
+<h3>9.3 User Management</h3><pre>GET   /api/v1/admin/users?role=BUYER|SUPPLIER&amp;search=&amp;status=&amp;page=&amp;limit=
+GET   /api/v1/admin/users/:userId
+PATCH /api/v1/admin/users/:userId/status
+PATCH /api/v1/admin/users/:userId/role
+POST  /api/v1/admin/roles/users
+GET   /api/v1/admin/roles/users</pre>
+<h3>9.4 Seller Management</h3><pre>GET   /api/v1/admin/sellers
+GET   /api/v1/admin/sellers/applications
+GET   /api/v1/admin/sellers/applications/:applicationId
+POST  /api/v1/admin/sellers/applications/:applicationId/approve
+POST  /api/v1/admin/sellers/applications/:applicationId/reject
+GET   /api/v1/admin/sellers/stores
+GET   /api/v1/admin/sellers/:sellerId/verification</pre>
+<p>Seller application statuses: PENDING, APPROVED, REJECTED. Store and GST/KYC verification must be auditable.</p>
+<h3>9.5 Buyer Management</h3><pre>GET /api/v1/admin/buyers
+GET /api/v1/admin/buyers/:buyerId
+GET /api/v1/admin/buyers/:buyerId/activity
+PATCH /api/v1/admin/buyers/:buyerId/status</pre>
+<h3>9.6 Catalog Governance</h3><pre>Use the Category, Subcategory, Product, Product Approval, and Brand APIs defined in Section 4.</pre>
+<p>Product approval APIs:</p><pre>GET  /api/v1/admin/catalog/product-approvals?status=PENDING
+GET  /api/v1/admin/catalog/product-approvals/:approvalId
+POST /api/v1/admin/catalog/product-approvals/:approvalId/approve
+POST /api/v1/admin/catalog/product-approvals/:approvalId/reject</pre>
+<p>Brand registry APIs:</p><pre>GET   /api/v1/admin/catalog/brands
+POST  /api/v1/admin/catalog/brands
+PATCH /api/v1/admin/catalog/brands/:brandId
+DELETE /api/v1/admin/catalog/brands/:brandId</pre>
+<h3>9.7 Admin Orders</h3><pre>GET   /api/v1/admin/orders?status=&amp;paymentStatus=&amp;search=&amp;page=&amp;limit=
+GET   /api/v1/admin/orders/:orderId
+PATCH /api/v1/admin/orders/:orderId/status
+POST  /api/v1/admin/orders/:orderId/tracking
+GET   /api/v1/admin/orders/export</pre>
+<h3>9.8 Admin RFQs and Quotations</h3><pre>GET /api/v1/admin/rfqs?status=&amp;search=&amp;page=&amp;limit=
+GET /api/v1/admin/rfqs/:rfqId
+GET /api/v1/admin/rfqs/:rfqId/quotations
+GET /api/v1/admin/quotations?status=&amp;search=&amp;page=&amp;limit=
+GET /api/v1/admin/quotations/:quotationId</pre>
+<h3>9.9 Inventory</h3><pre>GET   /api/v1/admin/inventory?status=IN_STOCK|LOW_STOCK|CRITICAL
+GET   /api/v1/admin/inventory/:inventoryId
+PATCH /api/v1/admin/inventory/:inventoryId/stock
+POST  /api/v1/admin/inventory/:inventoryId/adjustment</pre>
+<p>Stock status rule:</p><pre>CRITICAL: availableStock &lt;= reorderLevel / 2
+LOW_STOCK: availableStock &lt;= reorderLevel
+IN_STOCK: availableStock &gt; reorderLevel</pre>
+<h3>9.10 Payments and escrow</h3><pre>GET /api/v1/admin/payments?status=&amp;search=&amp;page=&amp;limit=
+GET /api/v1/admin/payments/:paymentId
+GET /api/v1/admin/escrow/settlements
+POST /api/v1/admin/escrow/:escrowId/release
+POST /api/v1/admin/escrow/:escrowId/hold
+POST /api/v1/admin/escrow/:escrowId/refund</pre>
+<h3>9.11 Reviews and ratings</h3><pre>GET   /api/v1/admin/reviews?status=PUBLISHED|FLAGGED|HIDDEN
+GET   /api/v1/admin/reviews/:reviewId
+PATCH /api/v1/admin/reviews/:reviewId/status
+POST  /api/v1/products/:productId/reviews
+GET   /api/v1/products/:productId/reviews</pre>
+<h3>9.12 Support and disputes</h3><pre>GET   /api/v1/admin/support/tickets?status=&amp;priority=&amp;search=
+GET   /api/v1/admin/support/tickets/:ticketId
+POST  /api/v1/support/tickets
+POST  /api/v1/admin/support/tickets/:ticketId/reply
+PATCH /api/v1/admin/support/tickets/:ticketId/status
+PATCH /api/v1/admin/support/tickets/:ticketId/priority</pre>
+<p>Ticket statuses: OPEN, IN_PROGRESS, RESOLVED. Store conversation history and attachments.</p>
+<h3>9.13 Notifications and broadcasts</h3><pre>GET  /api/v1/admin/notifications
+POST /api/v1/admin/notifications
+GET  /api/v1/admin/notifications/:notificationId
+POST /api/v1/admin/notifications/:notificationId/send
+POST /api/v1/admin/notifications/:notificationId/cancel</pre>
+<p>Notification fields: title, message, audience, channels, scheduledAt, status. Statuses: SCHEDULED, DISPATCHED, CANCELLED.</p>
+<h3>9.14 Analytics</h3><pre>GET /api/v1/admin/analytics/overview?from=&amp;to=&amp;groupBy=day|week|month
+GET /api/v1/admin/analytics/sales
+GET /api/v1/admin/analytics/products
+GET /api/v1/admin/analytics/users
+GET /api/v1/admin/analytics/regions</pre>
+<h3>9.15 Admin profile/settings</h3><pre>GET   /api/v1/admin/profile
+PATCH /api/v1/admin/profile
+PATCH /api/v1/admin/settings
+GET   /api/v1/admin/audit-logs?entityType=&amp;action=&amp;from=&amp;to=</pre>
+
+<h2>10. Status transitions</h2>
+<table><tr><th>Entity</th><th>Statuses</th><th>Important transition rule</th></tr>
+<tr><td>Product</td><td>DRAFT, ACTIVE, OUT_OF_STOCK, ARCHIVED</td><td>Only approved/valid products become ACTIVE</td></tr>
+<tr><td>RFQ</td><td>OPEN, QUOTED, ACCEPTED, EXPIRED, REJECTED</td><td>Only OPEN RFQs accept quotations</td></tr>
+<tr><td>Quotation</td><td>PENDING, ACCEPTED, REJECTED</td><td>Accepting one quotation closes competing quotes</td></tr>
+<tr><td>Order</td><td>PENDING, CONFIRMED, PROCESSING, SHIPPED, DELIVERED, CANCELLED</td><td>Prevent invalid backward transitions</td></tr>
+<tr><td>Payment</td><td>PENDING, PAID, FAILED, REFUNDED, ESCROW_HOLD</td><td>Payment success comes from provider webhook</td></tr>
+<tr><td>Ticket</td><td>OPEN, IN_PROGRESS, RESOLVED</td><td>Keep replies and status history</td></tr></table>
+
+<h2>11. Error format</h2><pre>{
+  "success": false,
+  "message": "Validation failed",
+  "errors": {
+    "categoryId": "Category is required",
+    "subcategoryId": "Subcategory does not belong to selected category"
+  },
+  "requestId": "req_123"
+}</pre>
+<p>Use 409 for duplicate category/subcategory/SKU, 422 for invalid business transitions, and return a request ID for tracing.</p>
+
+<h2>12. Database and operational requirements</h2>
+<pre>users
+user_roles
+addresses
+categories
+subcategories
+products
+product_images
+product_variants
+price_tiers
+wishlists
+rfqs
+quotations
+orders
+order_items
+payments
+escrow_transactions
+inventory
+inventory_movements
+conversations
+messages
+reviews
+support_tickets
+notifications
+audit_logs</pre>
+<p>Recommended unique constraints:</p><pre>UNIQUE categories.name
+UNIQUE (subcategories.category_id, subcategories.name)
+UNIQUE products.sku
+INDEX products.category_id
+INDEX products.subcategory_id
+INDEX products.status
+INDEX orders.buyer_id
+INDEX orders.supplier_id
+INDEX rfqs.status</pre>
+<p>Use database transactions for quotation acceptance/order creation, product creation with inventory initialization, payment/escrow updates, and admin approval actions. Use idempotency keys for OTP, order, payment, quotation acceptance, notification dispatch, and webhook processing.</p>
+
+<h2>13. End-to-end primary flows</h2>
+<h3>Buyer purchases through RFQ</h3><pre>Login → Browse products → View product → Create RFQ → Supplier quotes
+→ Compare quotations → Accept quotation → Create order → Create payment intent
+→ Payment webhook → Order confirmed → Supplier processes → Shipment tracking
+→ Delivery confirmation → Escrow release → Review product</pre>
+<h3>Admin catalog setup</h3><pre>Admin login → Create Category with mandatory image
+→ Create Subcategory under Category with mandatory image
+→ Add Product using Category and Subcategory dropdowns
+→ Upload product image → Submit product
+→ Validate/approve product → Product becomes visible to buyers</pre>
+<h3>Supplier selling flow</h3><pre>Supplier login → Complete KYC/GST → Add product → Admin approval
+→ Receive RFQ lead → Submit quotation → Buyer accepts → Process order
+→ Update shipment → Delivery → Settlement</pre>
+
+<h2>14. Frontend-to-backend implementation notes</h2>
+<ul><li>Frontend must not create categories automatically when creating a product.</li><li>Frontend must load subcategories after category selection and send both IDs.</li><li>Backend must independently verify every relationship and permission.</li><li>Category and Subcategory images are mandatory in the admin forms.</li><li>Product discount must be calculated by backend from MRP and selling price.</li><li>Admin count values such as productCount and subcategoryCount should be calculated by backend.</li><li>Use signed URLs or CDN URLs for image delivery and storage keys for replacement/deletion.</li><li>All admin changes should record actor, timestamp, previous value, new value, IP/device metadata where appropriate.</li></ul>
+</body></html>

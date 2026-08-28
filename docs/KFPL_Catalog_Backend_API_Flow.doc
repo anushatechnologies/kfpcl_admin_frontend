@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>KFPL Catalog Backend API Flow</title>
+<style>
+body{font-family:Arial,sans-serif;color:#172033;line-height:1.45;margin:42px}h1{color:#1d4ed8;border-bottom:3px solid #1d4ed8;padding-bottom:10px}h2{color:#1e40af;margin-top:28px;border-bottom:1px solid #dbeafe;padding-bottom:5px}h3{color:#334155;margin-top:22px}table{border-collapse:collapse;width:100%;margin:12px 0 20px}th{background:#1e3a8a;color:#fff;text-align:left}th,td{border:1px solid #cbd5e1;padding:8px;vertical-align:top}code,pre{font-family:Consolas,monospace}pre{background:#f1f5f9;border:1px solid #cbd5e1;padding:12px;white-space:pre-wrap}blockquote{border-left:4px solid #2563eb;padding-left:14px;color:#475569}.note{background:#eff6ff;border-left:4px solid #2563eb;padding:10px}.required{color:#b91c1c;font-weight:bold}</style>
+</head>
+<body>
+<h1>KFPL Catalog Management Backend API Flow</h1>
+<p><b>Document purpose:</b> Backend API handoff for the KFPL Admin Catalog Management module.</p>
+<p><b>Resource hierarchy:</b></p>
+<pre>Category
+  └── Subcategory
+        └── Product</pre>
+<p>Products must reference an existing active <code>categoryId</code> and <code>subcategoryId</code>. Category, Subcategory, and Product are separate backend resources.</p>
+
+<h2>1. Authentication and common rules</h2>
+<p>All endpoints require an authenticated admin user.</p>
+<pre>Authorization: Bearer &lt;admin_access_token&gt;
+Content-Type: application/json</pre>
+<table><tr><th>Permission</th><th>Usage</th></tr>
+<tr><td>catalog.read</td><td>List and view catalog data</td></tr>
+<tr><td>catalog.create</td><td>Create categories, subcategories, and products</td></tr>
+<tr><td>catalog.update</td><td>Edit catalog records</td></tr>
+<tr><td>catalog.delete</td><td>Archive catalog records</td></tr></table>
+<p>Use soft deletion wherever possible. Do not physically delete records that are referenced by products, orders, or reports.</p>
+
+<h2>2. Image upload flow</h2>
+<p>Images should be uploaded before creating the catalog record. The upload API returns a permanent CDN URL and storage key.</p>
+<h3>Endpoint</h3>
+<pre>POST /api/v1/admin/catalog/images
+Content-Type: multipart/form-data</pre>
+<h3>Multipart fields</h3>
+<table><tr><th>Field</th><th>Required</th><th>Values</th></tr>
+<tr><td>file</td><td>Yes</td><td>JPG, JPEG, PNG, or WEBP; maximum 5 MB</td></tr>
+<tr><td>type</td><td>Yes</td><td>CATEGORY, SUBCATEGORY, PRODUCT</td></tr></table>
+<h3>Response</h3>
+<pre>{
+  "success": true,
+  "data": {
+    "url": "https://cdn.kfpl.com/catalog/categories/dairy-123.jpg",
+    "storageKey": "catalog/categories/dairy-123.jpg"
+  }
+}</pre>
+<p>Validate file type, file size, image dimensions, and scan the file before saving it.</p>
+
+<h2>3. Category API flow</h2>
+<h3>3.1 Create category</h3>
+<pre>POST /api/v1/admin/catalog/categories</pre>
+<pre>{
+  "name": "Dairy, Bread &amp; Eggs",
+  "imageUrl": "https://cdn.kfpl.com/catalog/categories/dairy-123.jpg",
+  "imageStorageKey": "catalog/categories/dairy-123.jpg",
+  "description": "Fresh dairy products, bread and eggs",
+  "displayOrder": 1,
+  "discount": 5,
+  "isActive": true
+}</pre>
+<table><tr><th>Field</th><th>Type</th><th>Required</th><th>Validation</th></tr>
+<tr><td>name</td><td>string</td><td class="required">Yes</td><td>2–100 characters; unique</td></tr>
+<tr><td>imageUrl</td><td>string</td><td class="required">Yes</td><td>Must be returned by image upload API</td></tr>
+<tr><td>description</td><td>string</td><td>No</td><td>Optional category description</td></tr>
+<tr><td>displayOrder</td><td>integer</td><td>No</td><td>Minimum 0; default 0</td></tr>
+<tr><td>discount</td><td>number</td><td>No</td><td>0–100; default 0</td></tr>
+<tr><td>isActive</td><td>boolean</td><td>No</td><td>Default true</td></tr></table>
+<h3>Successful response: HTTP 201</h3>
+<pre>{
+  "success": true,
+  "message": "Category created successfully",
+  "data": {
+    "id": "cat_dairy_001",
+    "name": "Dairy, Bread &amp; Eggs",
+    "imageUrl": "https://cdn.kfpl.com/catalog/categories/dairy-123.jpg",
+    "description": "Fresh dairy products, bread and eggs",
+    "displayOrder": 1,
+    "discount": 5,
+    "isActive": true,
+    "subcategoryCount": 0,
+    "productCount": 0,
+    "createdAt": "2026-08-24T12:30:00Z"
+  }
+}</pre>
+<h3>3.2 List categories</h3>
+<pre>GET /api/v1/admin/catalog/categories?search=dairy&amp;isActive=true&amp;page=1&amp;limit=20</pre>
+<p>Return category image, name, description, display order, discount, status, subcategory count, and product count.</p>
+<h3>3.3 Get, update, and archive category</h3>
+<pre>GET    /api/v1/admin/catalog/categories/:categoryId
+PATCH  /api/v1/admin/catalog/categories/:categoryId
+DELETE /api/v1/admin/catalog/categories/:categoryId</pre>
+<p>PATCH accepts any editable category fields. DELETE should archive the category. Reject archive requests when active products exist unless the API explicitly supports cascading archive.</p>
+
+<h2>4. Subcategory API flow</h2>
+<h3>4.1 Create subcategory</h3>
+<pre>POST /api/v1/admin/catalog/subcategories</pre>
+<pre>{
+  "categoryId": "cat_dairy_001",
+  "name": "Milk",
+  "imageUrl": "https://cdn.kfpl.com/catalog/subcategories/milk-001.jpg",
+  "imageStorageKey": "catalog/subcategories/milk-001.jpg",
+  "description": "Toned, full cream and skimmed milk",
+  "displayOrder": 1,
+  "discount": 3,
+  "isActive": true
+}</pre>
+<table><tr><th>Field</th><th>Type</th><th>Required</th><th>Validation</th></tr>
+<tr><td>categoryId</td><td>string</td><td class="required">Yes</td><td>Must reference an existing category</td></tr>
+<tr><td>name</td><td>string</td><td class="required">Yes</td><td>Unique within the parent category</td></tr>
+<tr><td>imageUrl</td><td>string</td><td class="required">Yes</td><td>Must be returned by image upload API</td></tr>
+<tr><td>description</td><td>string</td><td>No</td><td>Optional description</td></tr>
+<tr><td>displayOrder</td><td>integer</td><td>No</td><td>Minimum 0; default 0</td></tr>
+<tr><td>discount</td><td>number</td><td>No</td><td>0–100; default 0</td></tr>
+<tr><td>isActive</td><td>boolean</td><td>No</td><td>Default true</td></tr></table>
+<h3>4.2 List subcategories</h3>
+<pre>GET /api/v1/admin/catalog/categories/:categoryId/subcategories
+GET /api/v1/admin/catalog/subcategories?categoryId=cat_dairy_001&amp;isActive=true&amp;page=1&amp;limit=20</pre>
+<h3>4.3 Get, update, and archive subcategory</h3>
+<pre>GET    /api/v1/admin/catalog/subcategories/:subcategoryId
+PATCH  /api/v1/admin/catalog/subcategories/:subcategoryId
+DELETE /api/v1/admin/catalog/subcategories/:subcategoryId</pre>
+
+<h2>5. Product API flow</h2>
+<p>Product creation is separate from Category and Subcategory creation. The frontend first loads categories, then loads subcategories after a category is selected.</p>
+<h3>5.1 Create product</h3>
+<pre>POST /api/v1/admin/catalog/products</pre>
+<pre>{
+  "productName": "Amul Taaza Milk",
+  "categoryId": "cat_dairy_001",
+  "subcategoryId": "sub_milk_001",
+  "brand": "Amul",
+  "description": "Fresh toned milk",
+  "imageUrl": "https://cdn.kfpl.com/catalog/products/amul-taaza-500.jpg",
+  "imageStorageKey": "catalog/products/amul-taaza-500.jpg",
+  "price": 30,
+  "mrp": 32,
+  "quantity": 500,
+  "unit": "ml",
+  "stockQuantity": 50,
+  "status": "ACTIVE",
+  "sku": "AML-MILK-500"
+}</pre>
+<table><tr><th>Field</th><th>Required</th><th>Validation</th></tr>
+<tr><td>productName</td><td class="required">Yes</td><td>3–150 characters</td></tr>
+<tr><td>categoryId</td><td class="required">Yes</td><td>Existing active category</td></tr>
+<tr><td>subcategoryId</td><td class="required">Yes</td><td>Existing active subcategory belonging to categoryId</td></tr>
+<tr><td>brand</td><td>Recommended</td><td>Maximum 100 characters</td></tr>
+<tr><td>description</td><td>Recommended</td><td>Product description</td></tr>
+<tr><td>imageUrl</td><td class="required">Yes</td><td>Uploaded product image</td></tr>
+<tr><td>price</td><td class="required">Yes</td><td>Greater than 0</td></tr>
+<tr><td>mrp</td><td>Recommended</td><td>Must be greater than or equal to price</td></tr>
+<tr><td>quantity</td><td class="required">Yes</td><td>Greater than 0</td></tr>
+<tr><td>unit</td><td class="required">Yes</td><td>ml, g, kg, or piece</td></tr>
+<tr><td>stockQuantity</td><td class="required">Yes</td><td>Integer; minimum 0</td></tr>
+<tr><td>status</td><td>Recommended</td><td>ACTIVE, DRAFT, or OUT_OF_STOCK</td></tr>
+<tr><td>sku</td><td>Recommended</td><td>Unique product code</td></tr></table>
+<p><b>Discount rule:</b> calculate the final product discount on the server. Do not trust a discount value sent by the browser.</p>
+<pre>discountPercentage = ((mrp - price) / mrp) * 100</pre>
+<h3>5.2 Product listing and filters</h3>
+<pre>GET /api/v1/admin/catalog/products
+  ?search=milk
+  &amp;categoryId=cat_dairy_001
+  &amp;subcategoryId=sub_milk_001
+  &amp;stockStatus=IN_STOCK
+  &amp;status=ACTIVE
+  &amp;page=1
+  &amp;limit=20</pre>
+<p>The Products page requires product image, name, category, subcategory, stock, status, and action data. The API should return these values in each product row.</p>
+<h3>5.3 Get, update, and archive product</h3>
+<pre>GET    /api/v1/admin/catalog/products/:productId
+PATCH  /api/v1/admin/catalog/products/:productId
+DELETE /api/v1/admin/catalog/products/:productId</pre>
+<h3>Product response example</h3>
+<pre>{
+  "success": true,
+  "data": {
+    "id": "prod_amul_milk_001",
+    "productName": "Amul Taaza Milk",
+    "category": { "id": "cat_dairy_001", "name": "Dairy, Bread &amp; Eggs" },
+    "subcategory": { "id": "sub_milk_001", "name": "Milk" },
+    "imageUrl": "https://cdn.kfpl.com/catalog/products/amul-taaza-500.jpg",
+    "brand": "Amul",
+    "price": 30,
+    "mrp": 32,
+    "discountPercentage": 6.25,
+    "quantity": 500,
+    "unit": "ml",
+    "stockQuantity": 50,
+    "stockStatus": "IN_STOCK",
+    "status": "ACTIVE",
+    "sku": "AML-MILK-500"
+  }
+}</pre>
+
+<h2>6. Complete frontend sequence</h2>
+<h3>Create Category</h3>
+<pre>1. Admin opens Categories
+2. Admin enters category name, description, display order, discount and active status
+3. Admin uploads mandatory category image
+4. Frontend calls POST /catalog/images with type CATEGORY
+5. Frontend calls POST /catalog/categories
+6. Backend validates, creates category, and returns category ID
+7. Frontend refreshes category list</pre>
+<h3>Create Subcategory</h3>
+<pre>1. Admin opens Subcategories
+2. Admin selects parent category
+3. Admin enters subcategory fields
+4. Admin uploads mandatory subcategory image
+5. Frontend calls POST /catalog/images with type SUBCATEGORY
+6. Frontend calls POST /catalog/subcategories
+7. Backend validates parent category and creates subcategory
+8. Frontend refreshes subcategory list</pre>
+<h3>Create Product</h3>
+<pre>1. Admin opens Products or Add Product
+2. Frontend calls GET /catalog/categories
+3. Admin selects a category
+4. Frontend calls GET /catalog/categories/:categoryId/subcategories
+5. Admin selects a subcategory
+6. Admin fills product details and uploads mandatory product image
+7. Frontend calls POST /catalog/images with type PRODUCT
+8. Frontend calls POST /catalog/products
+9. Backend validates category/subcategory relationship and SKU
+10. Backend calculates discount and creates product
+11. Frontend refreshes Products listing</pre>
+
+<h2>7. Transactions and side effects</h2>
+<ul><li>Create Category: insert category and create audit log in one transaction.</li><li>Create Subcategory: verify category, insert subcategory, update category subcategory count, and create audit log.</li><li>Create Product: verify category and subcategory relationship, calculate discount, insert product, update subcategory/category product counts, and create audit log.</li><li>On archive: do not show the record in active dropdowns or active product listings.</li><li>All create, update, archive, and image-delete operations should be auditable.</li></ul>
+
+<h2>8. Standard error responses</h2>
+<pre>400 Bad Request
+{
+  "success": false,
+  "message": "Validation failed",
+  "errors": {
+    "name": "Category name is required",
+    "imageUrl": "Category image is required"
+  }
+}</pre>
+<pre>409 Conflict
+{
+  "success": false,
+  "message": "SKU already exists",
+  "field": "sku"
+}</pre>
+<pre>401 Unauthorized
+403 Forbidden
+404 Resource Not Found
+500 Internal Server Error</pre>
+
+<h2>9. Recommended database tables</h2>
+<pre>categories
+id, name, image_url, image_storage_key, description, display_order,
+discount_percent, is_active, created_by, updated_by, created_at, updated_at, deleted_at
+
+subcategories
+id, category_id, name, image_url, image_storage_key, description, display_order,
+discount_percent, is_active, created_by, updated_by, created_at, updated_at, deleted_at
+
+products
+id, category_id, subcategory_id, product_name, brand, description,
+image_url, image_storage_key, price, mrp, discount_percent, quantity, unit,
+stock_quantity, status, sku, created_by, updated_by, created_at, updated_at, deleted_at</pre>
+<p>Recommended database constraints:</p>
+<pre>UNIQUE categories.name
+UNIQUE (subcategories.category_id, subcategories.name)
+UNIQUE products.sku
+INDEX subcategories.category_id
+INDEX products.category_id
+INDEX products.subcategory_id
+INDEX products.status</pre>
+</body>
+</html>

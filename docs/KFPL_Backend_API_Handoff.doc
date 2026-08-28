@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>KFPL B2B Marketplace - Backend API Handoff</title>
+<style>
+body{font-family:Arial,sans-serif;color:#172033;line-height:1.45;margin:42px}h1{color:#123b72;border-bottom:3px solid #2f80ed;padding-bottom:10px}h2{color:#1b5fa7;margin-top:28px}h3{color:#334155;margin-top:20px}p{font-size:10.5pt}li{margin:5px 0}.note{background:#eef6ff;border-left:4px solid #2f80ed;padding:12px;margin:15px 0}.warn{background:#fff7ed;border-left:4px solid #f59e0b;padding:12px;margin:15px 0}table{width:100%;border-collapse:collapse;margin:10px 0 18px;font-size:9.5pt}th{background:#1f4e79;color:#fff;text-align:left;padding:8px}td{border:1px solid #cbd5e1;padding:7px;vertical-align:top}code{font-family:Consolas,monospace;background:#f1f5f9;padding:2px 4px}pre{background:#f1f5f9;border:1px solid #cbd5e1;padding:10px;white-space:pre-wrap;font-family:Consolas,monospace;font-size:9pt}.small{color:#64748b;font-size:9pt}
+</style>
+</head>
+<body>
+<h1>KFPL B2B Marketplace<br>Backend API Handoff</h1>
+<p class="small">Version 1.0 &nbsp;|&nbsp; Prepared for backend implementation &nbsp;|&nbsp; Base URL: <code>/api/v1</code></p>
+<div class="note"><b>Important:</b> The frontend now starts with empty collections. The Zustand stores currently hold local state, but the following APIs are the complete backend contract required to replace that local state.</div>
+
+<h2>1. API standards</h2>
+<ul><li>Authentication: <code>Authorization: Bearer &lt;accessToken&gt;</code></li><li>JSON: <code>Content-Type: application/json</code></li><li>Dates: ISO 8601 UTC</li><li>Money: use integer minor units plus currency, or consistently use decimal major units.</li><li>Use pagination: <code>?page=1&amp;limit=20</code></li></ul>
+<pre>{
+  "data": [],
+  "meta": { "page": 1, "limit": 20, "total": 0, "hasNext": false }
+}</pre>
+<p>Errors: <code>{"error":{"code":"VALIDATION_ERROR","message":"Readable message","fields":{}}}</code>. Use 200/201/204/400/401/403/404/409/422 appropriately.</p>
+
+<h2>2. Authentication and onboarding</h2>
+<table><tr><th>Method</th><th>Endpoint</th><th>Purpose</th></tr><tr><td>POST</td><td>/auth/otp/request</td><td>Send OTP by SMS or WhatsApp.</td></tr><tr><td>POST</td><td>/auth/otp/verify</td><td>Verify OTP and return access/refresh tokens and user.</td></tr><tr><td>POST</td><td>/auth/refresh</td><td>Refresh access token.</td></tr><tr><td>POST</td><td>/auth/logout</td><td>Revoke refresh token.</td></tr><tr><td>GET</td><td>/auth/me</td><td>Restore current session.</td></tr><tr><td>PATCH</td><td>/users/me</td><td>Update onboarding/profile.</td></tr><tr><td>PATCH</td><td>/users/me/preferences</td><td>Language, location permission, active role.</td></tr></table>
+<pre>POST /auth/otp/verify
+{ "phone": "+919876543210", "otp": "123456" }
+
+Response: { "data": { "accessToken": "jwt", "refreshToken": "token", "expiresIn": 3600, "user": {} } }</pre>
+
+<h2>3. Users, buyers, suppliers, roles</h2>
+<table><tr><th>Method</th><th>Endpoint</th><th>Purpose</th></tr><tr><td>GET</td><td>/users?role=&amp;status=&amp;search=</td><td>User directory.</td></tr><tr><td>GET</td><td>/users/:id</td><td>User details.</td></tr><tr><td>PATCH</td><td>/users/:id/status</td><td>Activate or suspend user.</td></tr><tr><td>GET</td><td>/buyers, /buyers/:id</td><td>Buyer list/details.</td></tr><tr><td>GET</td><td>/buyers/:id/activity</td><td>Buyer activity log.</td></tr><tr><td>GET</td><td>/suppliers?status=&amp;search=</td><td>Supplier directory.</td></tr><tr><td>GET</td><td>/suppliers/:id</td><td>Supplier details.</td></tr><tr><td>GET/POST</td><td>/supplier-applications</td><td>Supplier applications.</td></tr><tr><td>POST</td><td>/supplier-applications/:id/approve|reject</td><td>Review supplier application.</td></tr><tr><td>GET</td><td>/admin/users, /admin/roles</td><td>Admin users/roles.</td></tr><tr><td>POST/PATCH/DELETE</td><td>/admin/users, /admin/users/:id</td><td>Admin access management.</td></tr><tr><td>GET</td><td>/users/me/permissions</td><td>Permission list.</td></tr></table>
+<p>Use permission codes such as <code>catalog.read</code>, <code>catalog.write</code>, <code>orders.update</code>, <code>payments.read</code>, <code>support.resolve</code>, and <code>analytics.read</code>.</p>
+
+<h2>4. Catalog, categories, products, inventory</h2>
+<table><tr><th>Method</th><th>Endpoint</th><th>Purpose</th></tr><tr><td>GET/POST</td><td>/categories</td><td>List/create categories.</td></tr><tr><td>GET/PATCH/DELETE</td><td>/categories/:id</td><td>Category management.</td></tr><tr><td>GET</td><td>/products?query=&amp;category=&amp;supplierId=&amp;verifiedOnly=&amp;gstOnly=&amp;sort=</td><td>Search/filter products.</td></tr><tr><td>POST</td><td>/products</td><td>Create supplier product.</td></tr><tr><td>GET/PATCH/DELETE</td><td>/products/:id</td><td>Product details/update/delete.</td></tr><tr><td>GET</td><td>/product-approvals?status=</td><td>Admin approval queue.</td></tr><tr><td>POST</td><td>/product-approvals/:id/approve|reject</td><td>Approve/reject listing.</td></tr><tr><td>GET</td><td>/inventory?warehouseId=&amp;status=&amp;query=</td><td>Inventory list.</td></tr><tr><td>PATCH</td><td>/inventory/:id/stock</td><td>Adjust stock with reason.</td></tr><tr><td>GET/POST/PATCH/DELETE</td><td>/brands, /brands/:id</td><td>Brand registry.</td></tr><tr><td>GET/POST/PATCH/DELETE</td><td>/catalog/attributes, /catalog/attributes/:id</td><td>Catalog attributes.</td></tr></table>
+<pre>PATCH /inventory/:id/stock
+{ "availableStock": 120, "reason": "Physical count" }</pre>
+
+<h2>5. Search and wishlist</h2>
+<table><tr><th>Method</th><th>Endpoint</th><th>Purpose</th></tr><tr><td>GET</td><td>/search?q=&amp;types=products,buyers,orders,rfqs</td><td>Global search.</td></tr><tr><td>GET</td><td>/users/me/wishlist</td><td>Get saved products.</td></tr><tr><td>POST</td><td>/users/me/wishlist/:productId</td><td>Add wishlist item.</td></tr><tr><td>DELETE</td><td>/users/me/wishlist/:productId</td><td>Remove wishlist item.</td></tr></table>
+
+<h2>6. RFQ and quotation flow</h2>
+<ol><li><code>POST /rfqs</code> — buyer creates RFQ.</li><li><code>GET /rfqs?mine=true&amp;status=&amp;search=</code> — list RFQs.</li><li><code>GET /rfqs/marketplace</code> — supplier sees eligible RFQs.</li><li><code>POST /rfqs/:rfqId/quotations</code> — supplier submits quote.</li><li><code>GET /rfqs/:rfqId/quotations</code> — buyer compares quotes.</li><li><code>POST /quotations/:id/accept</code> — accept one quote and reject other quotes atomically.</li><li><code>POST /quotations/:id/reject</code>, <code>POST /rfqs/:id/close</code> — lifecycle actions.</li></ol>
+<pre>POST /rfqs
+{ "productTitle":"CNC machine", "category":"Industrial Machinery", "quantity":10, "unit":"Units", "targetPrice":250000, "expectedDeliveryDate":"2026-09-30", "description":"Required specifications", "attachments":[] }</pre>
+
+<h2>7. Orders, delivery, disputes, invoices</h2>
+<table><tr><th>Method</th><th>Endpoint</th><th>Purpose</th></tr><tr><td>POST</td><td>/orders</td><td>Create order from accepted quotation.</td></tr><tr><td>GET</td><td>/orders?role=&amp;status=</td><td>Order list.</td></tr><tr><td>GET</td><td>/orders/:id</td><td>Order details.</td></tr><tr><td>PATCH</td><td>/orders/:id/status</td><td>Confirm/process/ship/deliver/cancel.</td></tr><tr><td>POST/GET</td><td>/orders/:id/disputes</td><td>Create/list order disputes.</td></tr><tr><td>POST/GET</td><td>/orders/:id/invoice</td><td>Create/download invoice.</td></tr></table>
+<p>Validate order status transitions server-side. Never trust frontend totals, payment status, identities, or delivery addresses.</p>
+
+<h2>8. Payments and escrow</h2>
+<table><tr><th>Method</th><th>Endpoint</th><th>Purpose</th></tr><tr><td>POST</td><td>/payments/orders/:orderId/intent</td><td>Create payment intent.</td></tr><tr><td>POST</td><td>/payments/orders/:orderId/confirm</td><td>Confirm payment.</td></tr><tr><td>POST</td><td>/payments/orders/:orderId/checkout</td><td>Checkout orchestration.</td></tr><tr><td>GET</td><td>/payments/methods</td><td>Available payment methods.</td></tr><tr><td>GET</td><td>/payments/transactions</td><td>Payment ledger.</td></tr><tr><td>POST</td><td>/payments/transactions/:id/release-escrow</td><td>Release supplier funds.</td></tr><tr><td>POST</td><td>/payments/transactions/:id/refund</td><td>Refund payment.</td></tr><tr><td>POST</td><td>/payments/webhooks/:provider</td><td>Verified, idempotent provider webhook.</td></tr><tr><td>GET</td><td>/payments/settlements</td><td>Supplier settlements.</td></tr><tr><td>GET</td><td>/payments/reconciliation/export</td><td>Bank reconciliation export.</td></tr></table>
+
+<h2>9. Supplier dashboard and leads</h2>
+<table><tr><th>Method</th><th>Endpoint</th><th>Purpose</th></tr><tr><td>GET</td><td>/suppliers/me/dashboard?from=&amp;to=</td><td>Revenue, leads, orders, visitors, performance, top products.</td></tr><tr><td>GET</td><td>/suppliers/me/leads?status=&amp;search=</td><td>Supplier lead list.</td></tr><tr><td>GET/PATCH</td><td>/suppliers/me/leads/:id</td><td>Lead detail/status/follow-up.</td></tr><tr><td>GET</td><td>/suppliers/me/products</td><td>Supplier-owned products.</td></tr></table>
+
+<h2>10. Chat, uploads, realtime</h2>
+<table><tr><th>Method</th><th>Endpoint</th><th>Purpose</th></tr><tr><td>GET/POST</td><td>/conversations</td><td>List/start conversations.</td></tr><tr><td>GET</td><td>/conversations/:id/messages?cursor=&amp;limit=</td><td>Message history.</td></tr><tr><td>POST</td><td>/conversations/:id/messages</td><td>Send text/product/quote/image/document message.</td></tr><tr><td>POST</td><td>/uploads/presign</td><td>Secure file upload URL.</td></tr><tr><td>POST</td><td>/conversations/:id/read</td><td>Mark messages read.</td></tr></table>
+<p>Recommended realtime events: <code>message.created</code>, <code>conversation.updated</code>, <code>notification.created</code>, <code>order.status_changed</code>, <code>payment.status_changed</code>, and <code>support.updated</code>.</p>
+
+<h2>11. Reviews and ratings</h2>
+<table><tr><th>Method</th><th>Endpoint</th><th>Purpose</th></tr><tr><td>POST</td><td>/orders/:orderId/reviews</td><td>Create verified review.</td></tr><tr><td>GET</td><td>/reviews?status=&amp;rating=&amp;productId=&amp;supplierId=</td><td>Review list.</td></tr><tr><td>POST</td><td>/reviews/:id/publish|hide|flag</td><td>Admin moderation.</td></tr></table>
+
+<h2>12. Support and disputes</h2>
+<table><tr><th>Method</th><th>Endpoint</th><th>Purpose</th></tr><tr><td>POST</td><td>/support/tickets</td><td>Create support case.</td></tr><tr><td>GET</td><td>/support/tickets?status=&amp;priority=&amp;assigneeId=</td><td>Ticket list.</td></tr><tr><td>GET</td><td>/support/tickets/:id</td><td>Ticket detail.</td></tr><tr><td>POST</td><td>/support/tickets/:id/messages</td><td>Ticket conversation.</td></tr><tr><td>PATCH</td><td>/support/tickets/:id/priority</td><td>Change priority.</td></tr><tr><td>POST</td><td>/support/tickets/:id/assign</td><td>Assign agent.</td></tr><tr><td>POST</td><td>/support/tickets/:id/resolve</td><td>Resolve case.</td></tr></table>
+
+<h2>13. Notifications and broadcasts</h2>
+<table><tr><th>Method</th><th>Endpoint</th><th>Purpose</th></tr><tr><td>GET</td><td>/notifications?unreadOnly=</td><td>User notifications.</td></tr><tr><td>POST</td><td>/notifications/:id/read</td><td>Mark notification read.</td></tr><tr><td>POST</td><td>/notifications/read-all</td><td>Mark all read.</td></tr><tr><td>GET/PATCH</td><td>/users/me/notification-preferences</td><td>Notification preferences.</td></tr><tr><td>POST</td><td>/admin/broadcasts</td><td>Send broadcast to all/buyers/sellers.</td></tr><tr><td>GET</td><td>/admin/broadcasts</td><td>Broadcast history and delivery status.</td></tr></table>
+
+<h2>14. Analytics, settings, audit</h2>
+<table><tr><th>Method</th><th>Endpoint</th><th>Purpose</th></tr><tr><td>GET</td><td>/admin/analytics/summary?from=&amp;to=</td><td>GMV, conversion, settlement, retention.</td></tr><tr><td>GET</td><td>/admin/analytics/revenue?groupBy=</td><td>Revenue chart data.</td></tr><tr><td>GET</td><td>/admin/analytics/categories</td><td>Category share data.</td></tr><tr><td>GET</td><td>/admin/analytics/top-products</td><td>Top product performance.</td></tr><tr><td>GET</td><td>/admin/analytics/export?format=csv</td><td>Server-generated analytics export.</td></tr><tr><td>GET/PATCH</td><td>/admin/settings</td><td>Platform settings.</td></tr><tr><td>GET</td><td>/admin/audit-log</td><td>Immutable sensitive-action audit trail.</td></tr></table>
+
+<h2>15. Profile verification</h2>
+<table><tr><th>Method</th><th>Endpoint</th><th>Purpose</th></tr><tr><td>POST</td><td>/users/me/avatar/presign</td><td>Avatar upload.</td></tr><tr><td>POST</td><td>/users/me/kyc/submit</td><td>Submit KYC.</td></tr><tr><td>GET</td><td>/users/me/kyc/status</td><td>KYC status.</td></tr><tr><td>POST</td><td>/users/me/gst/verify</td><td>Verify GST.</td></tr></table>
+
+<h2>16. Frontend integration sequence</h2>
+<ol><li>App boot calls <code>/auth/me</code>; 401 shows sign-in.</li><li>After login, load user, permissions, preferences, and unread notifications.</li><li>Each screen loads its list endpoint with search/filter/pagination.</li><li>After every mutation, replace local state with the returned canonical record.</li><li>Invalidate related data after status changes. Accepting a quotation refreshes RFQ, quotes, orders, payments, and notifications.</li><li>Refresh token once on 401; logout if refresh fails.</li><li>On 403 hide mutation controls and show access denied.</li><li>On 422 map <code>error.fields</code> to form controls.</li><li>Use WebSocket/SSE for chat, notifications, orders, payments, and support.</li></ol>
+
+<div class="warn"><b>Remove before production:</b> hardcoded dashboard fallback counts, onboarding sample phone/OTP/company/GST, client-generated identity/order/payment fields, voice-search simulation values, and hardcoded export rows. All displayed values must come from APIs or explicit empty states.</div>
+<h2>17. Recommended implementation order</h2>
+<ol><li>Auth, profile, permissions, uploads.</li><li>Categories, products, suppliers, RFQs, quotations.</li><li>Orders, delivery, payment intents, escrow, webhooks.</li><li>Inventory, reviews, support, notifications, chat.</li><li>Admin roles, audit logs, analytics, exports, realtime events.</li></ol>
+</body></html>
