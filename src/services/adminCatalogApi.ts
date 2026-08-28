@@ -38,17 +38,37 @@ export type AdminProductPayload = {
 
 const API_BASE_URL = (((import.meta as ImportMeta & { env?: { VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL) || '').replace(/\/$/, '');
 
+export const extractArrayFromResponse = <T>(payload: any): T[] => {
+  if (!payload) return [];
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload.data)) return payload.data;
+  if (Array.isArray(payload.content)) return payload.content;
+  if (Array.isArray(payload.subcategories)) return payload.subcategories;
+  if (Array.isArray(payload.categories)) return payload.categories;
+  if (Array.isArray(payload.products)) return payload.products;
+  if (Array.isArray(payload.items)) return payload.items;
+  if (Array.isArray(payload.results)) return payload.results;
+  if (Array.isArray(payload.list)) return payload.list;
+  if (Array.isArray(payload.records)) return payload.records;
+
+  if (payload.data && typeof payload.data === 'object') {
+    if (Array.isArray(payload.data.content)) return payload.data.content;
+    if (Array.isArray(payload.data.subcategories)) return payload.data.subcategories;
+    if (Array.isArray(payload.data.categories)) return payload.data.categories;
+    if (Array.isArray(payload.data.products)) return payload.data.products;
+    if (Array.isArray(payload.data.items)) return payload.data.items;
+    if (Array.isArray(payload.data.results)) return payload.data.results;
+    if (Array.isArray(payload.data.list)) return payload.data.list;
+    if (Array.isArray(payload.data.records)) return payload.data.records;
+  }
+  return [];
+};
+
 export const getArray = async <T>(path: string, signal?: AbortSignal): Promise<T[]> => {
   const response = await fetch(`${API_BASE_URL}${path}`, { method: 'GET', signal, headers: { Accept: 'application/json' } });
   if (!response.ok) throw new Error(`GET ${path} failed (${response.status})`);
   const payload = await response.json();
-  if (Array.isArray(payload)) return payload;
-  if (Array.isArray(payload?.data)) return payload.data;
-  if (Array.isArray(payload?.data?.content)) return payload.data.content;
-  if (Array.isArray(payload?.content)) return payload.content;
-  if (Array.isArray(payload?.items)) return payload.items;
-  if (Array.isArray(payload?.results)) return payload.results;
-  return [];
+  return extractArrayFromResponse<T>(payload);
 };
 
 export const getAllPages = async <T>(path: string, signal?: AbortSignal): Promise<T[]> => {
@@ -67,12 +87,10 @@ export const getAllPages = async <T>(path: string, signal?: AbortSignal): Promis
     const payload = await response.json();
     if (Array.isArray(payload)) return page === 0 ? payload : records.concat(payload);
 
-    const pageData = payload?.data ?? payload;
-    const content = Array.isArray(pageData?.content)
-      ? pageData.content
-      : Array.isArray(pageData) ? pageData : [];
+    const content = extractArrayFromResponse<T>(payload);
     records.push(...content);
 
+    const pageData = payload?.data ?? payload;
     const reportedPages = Number(pageData?.totalPages ?? payload?.totalPages);
     const totalElements = Number(pageData?.totalElements ?? payload?.totalElements);
     const reportedSize = Number(pageData?.size ?? payload?.size) || 100;
@@ -86,6 +104,34 @@ export const getAllPages = async <T>(path: string, signal?: AbortSignal): Promis
   return records;
 };
 
+const extractErrorMessage = (payload: any): string => {
+  if (!payload) return '';
+  if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+    const details = payload.errors
+      .map((err: any) => {
+        if (typeof err === 'string') return err;
+        if (err.field && (err.defaultMessage || err.message)) return `${err.field}: ${err.defaultMessage || err.message}`;
+        if (err.defaultMessage || err.message) return err.defaultMessage || err.message;
+        return JSON.stringify(err);
+      })
+      .join('; ');
+    return payload.message ? `${payload.message} -> [${details}]` : details;
+  }
+  if (payload.fieldErrors && typeof payload.fieldErrors === 'object') {
+    const details = Object.entries(payload.fieldErrors)
+      .map(([field, msg]) => `${field}: ${msg}`)
+      .join('; ');
+    return payload.message ? `${payload.message} -> [${details}]` : details;
+  }
+  if (typeof payload.errors === 'object' && payload.errors !== null) {
+    const details = Object.entries(payload.errors)
+      .map(([field, msg]) => `${field}: ${msg}`)
+      .join('; ');
+    return payload.message ? `${payload.message} -> [${details}]` : details;
+  }
+  return payload.message || payload.error || payload.detail || '';
+};
+
 const sendJson = async <T>(path: string, method: 'POST' | 'PATCH', body: unknown): Promise<T> => {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method,
@@ -96,7 +142,9 @@ const sendJson = async <T>(path: string, method: 'POST' | 'PATCH', body: unknown
     let detail = '';
     try {
       const errorPayload = await response.json();
-      detail = errorPayload?.message ? `: ${errorPayload.message}` : '';
+      console.error(`[API Error ${response.status}] ${method} ${path}:`, errorPayload);
+      const extracted = extractErrorMessage(errorPayload);
+      detail = extracted ? `: ${extracted}` : '';
     } catch {
       // Keep the HTTP error useful even when the server returns no JSON body.
     }
@@ -142,8 +190,44 @@ export const deleteAdminProduct = async (id: string): Promise<void> => {
   }
 };
 
+export const deleteAdminSubcategory = async (id: string): Promise<void> => {
+  const path = `/api/v1/admin/catalog/subcategories/${encodeURIComponent(id)}`;
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'DELETE',
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) {
+    let detail = '';
+    try {
+      const errorPayload = await response.json();
+      const extracted = extractErrorMessage(errorPayload);
+      detail = extracted ? `: ${extracted}` : errorPayload?.message ? `: ${errorPayload.message}` : '';
+    } catch {
+      // Keep the HTTP error useful even when the server returns no JSON body.
+    }
+    throw new Error(`DELETE ${path} failed (${response.status})${detail}`);
+  }
+};
+
 export const fetchAdminSubcategories = (signal?: AbortSignal) =>
   getAllPages<unknown>('/api/v1/admin/catalog/subcategories', signal);
+
+export const fetchAdminSubcategoriesByCategory = async (categoryId: string, signal?: AbortSignal): Promise<unknown[]> => {
+  if (!categoryId) return [];
+  try {
+    const byPath = await getArray<unknown>(`/api/v1/admin/catalog/categories/${encodeURIComponent(categoryId)}/subcategories`, signal);
+    return byPath;
+  } catch {
+    // Continue fallback
+  }
+  try {
+    const byQuery = await getAllPages<unknown>(`/api/v1/admin/catalog/subcategories?categoryId=${encodeURIComponent(categoryId)}`, signal);
+    return byQuery;
+  } catch {
+    // Continue fallback
+  }
+  return fetchAdminSubcategories(signal);
+};
 
 export const fetchAdminCategories = (signal?: AbortSignal) =>
   getArray<unknown>('/api/v1/admin/catalog/categories', signal);
@@ -166,6 +250,39 @@ export const updateAdminCategory = (id: string, body: Partial<AdminCategoryPaylo
 export const updateAdminSubcategory = (id: string, body: Partial<AdminSubcategoryPayload>) =>
   sendJson<unknown>(`/api/v1/admin/catalog/subcategories/${encodeURIComponent(id)}`, 'PATCH', body);
 
+export const formatProductImageUrl = (url: any): string => {
+  if (!url || typeof url !== 'string') return '';
+  const trimmed = url.trim();
+  if (!trimmed) return '';
+
+  if (trimmed.startsWith('data:') || trimmed.startsWith('blob:')) {
+    return trimmed;
+  }
+
+  let normalized = trimmed;
+
+  // Rewrite legacy IP/ports to the active production API domain
+  if (normalized.includes('18.61.70.201:8080')) {
+    normalized = normalized.replace(/^http:\/\/18\.61\.70\.201:8080/, API_BASE_URL);
+  } else if (normalized.includes('18.61.70.201')) {
+    normalized = normalized.replace(/^https?:\/\/18\.61\.70\.201(:\d+)?/, API_BASE_URL);
+  } else if (normalized.includes('localhost:8080')) {
+    normalized = normalized.replace(/^http:\/\/localhost:8080/, API_BASE_URL);
+  }
+
+  // Handle relative paths (e.g. /uploads/... or uploads/...)
+  if (!normalized.startsWith('http://') && !normalized.startsWith('https://')) {
+    const cleanPath = normalized.startsWith('/') ? normalized : `/${normalized}`;
+    normalized = `${API_BASE_URL}${cleanPath}`;
+  }
+
+  if (normalized.startsWith('http://api.kfpclexports.com')) {
+    normalized = normalized.replace('http://', 'https://');
+  }
+
+  return normalized;
+};
+
 export const mapApiProductToProduct = (raw: any, categoriesList: any[] = [], subcategoriesList: any[] = []): any => {
   const rawCatId = raw.categoryId || raw.category_id || raw.category?.id;
   const rawSubId = raw.subcategoryId || raw.subcategory_id || raw.subcategory?.id;
@@ -175,8 +292,45 @@ export const mapApiProductToProduct = (raw: any, categoriesList: any[] = [], sub
   const categoryName = raw.categoryName || raw.category?.name || catObj?.name || (typeof raw.category === 'string' ? raw.category : '') || rawCatId || 'General';
   const subcategoryName = raw.subcategoryName || raw.subcategory?.name || subObj?.name || (typeof raw.subcategory === 'string' ? raw.subcategory : '') || rawSubId || '';
 
-  const imageUrl = raw.imageUrl || raw.image || (Array.isArray(raw.images) && raw.images[0]) || '';
-  const images = Array.isArray(raw.images) && raw.images.length > 0 ? raw.images : (imageUrl ? [imageUrl] : []);
+  let rawImagesList: string[] = [];
+  if (Array.isArray(raw.images)) {
+    rawImagesList = raw.images.map((x: any) => typeof x === 'string' ? x : x?.url || x?.imageUrl).filter(Boolean);
+  } else if (Array.isArray(raw.productImages)) {
+    rawImagesList = raw.productImages.map((x: any) => typeof x === 'string' ? x : x?.url || x?.imageUrl).filter(Boolean);
+  } else if (Array.isArray(raw.media)) {
+    rawImagesList = raw.media.map((m: any) => typeof m === 'string' ? m : m?.url || m?.fileUrl || m?.imageUrl).filter(Boolean);
+  } else if (typeof raw.images === 'string' && raw.images.trim()) {
+    try {
+      const parsed = JSON.parse(raw.images);
+      if (Array.isArray(parsed)) {
+        rawImagesList = parsed.map((x: any) => String(x || '').trim()).filter(Boolean);
+      } else {
+        rawImagesList = [raw.images.trim()];
+      }
+    } catch {
+      rawImagesList = raw.images.split(',').map((x) => x.trim()).filter(Boolean);
+    }
+  }
+
+  const rawSingleImage =
+    raw.imageUrl ||
+    raw.image_url ||
+    raw.image ||
+    raw.imgUrl ||
+    raw.img_url ||
+    raw.thumbnail ||
+    raw.thumbnailUrl ||
+    raw.picture ||
+    raw.productImage ||
+    raw.product_image ||
+    raw.photo ||
+    raw.fileUrl ||
+    (rawImagesList.length > 0 ? rawImagesList[0] : '');
+
+  const formattedSingle = formatProductImageUrl(rawSingleImage);
+  const formattedImages = rawImagesList.map(formatProductImageUrl).filter(Boolean);
+  const images = formattedImages.length > 0 ? formattedImages : (formattedSingle ? [formattedSingle] : []);
+  const imageUrl = formattedSingle || (images.length > 0 ? images[0] : '');
 
   const priceNum = typeof raw.price === 'number' ? raw.price : (Number(raw.price) || 0);
   const stockNum = typeof raw.stockQuantity === 'number' ? raw.stockQuantity : (typeof raw.stock === 'number' ? raw.stock : (Number(raw.stockQuantity || raw.stock) || 0));
@@ -222,4 +376,3 @@ export const fetchAdminCatalog = async (signal?: AbortSignal) => {
   ]);
   return { products, categories, subcategories, brands };
 };
-

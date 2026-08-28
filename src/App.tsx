@@ -31,13 +31,26 @@ import { AddProductModal } from './components/modals/AddProductModal';
 import { Product, RFQItem, OrderItem } from './types';
 import { Smartphone, Monitor, Sparkles, RefreshCw, ShieldAlert, ShieldCheck } from 'lucide-react';
 
+const getInitialViewMode = (): 'BUYER' | 'SUPPLIER' | 'ADMIN' => {
+  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
+    return 'ADMIN';
+  }
+  const saved = localStorage.getItem('kfpl_view_mode');
+  if (saved === 'BUYER' || saved === 'SUPPLIER' || saved === 'ADMIN') return saved;
+  return 'ADMIN';
+};
+
 export const App: React.FC = () => {
   const { isAuthenticated, isOnboarded, user, logout } = useAuthStore();
   const { activeRole, switchRole } = useRoleStore();
   const { isSupplierApproved } = useAdminStore();
   const { selectedProduct, setSelectedProduct } = useProductStore();
 
-  const [viewMode, setViewMode] = useState<'BUYER' | 'SUPPLIER' | 'ADMIN'>('ADMIN');
+  const [viewMode, setViewModeState] = useState<'BUYER' | 'SUPPLIER' | 'ADMIN'>(getInitialViewMode);
+  const setViewMode = (mode: 'BUYER' | 'SUPPLIER' | 'ADMIN') => {
+    localStorage.setItem('kfpl_view_mode', mode);
+    setViewModeState(mode);
+  };
   const [activeTab, setActiveTab] = useState<TabType>('HOME');
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [addProductModalOpen, setAddProductModalOpen] = useState(false);

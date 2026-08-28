@@ -9,14 +9,16 @@ import {
   createAdminSubcategory,
   deleteAdminCategory,
   deleteAdminProduct,
+  deleteAdminSubcategory,
   fetchAdminCatalog,
   fetchAdminCategories,
   fetchAdminProducts,
   fetchAdminSubcategories,
+  fetchAdminSubcategoriesByCategory,
+  formatProductImageUrl,
   mapApiProductToProduct,
   updateAdminCategory,
 } from '../../../services/adminCatalogApi';
-import { PageTabs, TabItem } from '../../../components/common/PageTabs';
 import {
   Package,
   CheckCircle2,
@@ -34,7 +36,6 @@ import {
   Boxes,
 } from 'lucide-react';
 
-const PRODUCT_IMAGE_FALLBACK = 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=160&q=80';
 const GST_BY_CATEGORY: Record<string, number> = {
   'Industrial Machinery': 18,
   'Electronics & Components': 18,
@@ -97,6 +98,7 @@ export const AdminCatalogManagementView: React.FC = () => {
   const [categorySubmitting, setCategorySubmitting] = useState(false);
   const [deletingCategoryId, setDeletingCategoryId] = useState('');
   const [deletingProductId, setDeletingProductId] = useState('');
+  const [deletingSubcategoryId, setDeletingSubcategoryId] = useState('');
   const [updatingCategory, setUpdatingCategory] = useState(false);
 
   const [productSubmitting, setProductSubmitting] = useState(false);
@@ -123,14 +125,16 @@ export const AdminCatalogManagementView: React.FC = () => {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
 
   const isDark = theme === 'dark';
-  const activeCategories = categories.filter((category) => {
+  const safeCategories = Array.isArray(categories) ? categories : [];
+  const activeCategories = safeCategories.filter((category) => {
     const apiCategory = category as typeof category & { status?: string };
-    const status = apiCategory.status?.toUpperCase();
-    return apiCategory.isActive !== false && status !== 'INACTIVE' && status !== 'ARCHIVED';
+    const status = apiCategory?.status?.toUpperCase();
+    return apiCategory?.isActive !== false && status !== 'INACTIVE' && status !== 'ARCHIVED';
   });
+  const safeSubcategories = Array.isArray(apiSubcategories) ? apiSubcategories : [];
   const subcategoryPageSize = 8;
-  const subcategoryTotalPages = Math.max(1, Math.ceil(apiSubcategories.length / subcategoryPageSize));
-  const visibleSubcategories = apiSubcategories.slice((subcategoryPage - 1) * subcategoryPageSize, subcategoryPage * subcategoryPageSize);
+  const subcategoryTotalPages = Math.max(1, Math.ceil(safeSubcategories.length / subcategoryPageSize));
+  const visibleSubcategories = safeSubcategories.slice((subcategoryPage - 1) * subcategoryPageSize, subcategoryPage * subcategoryPageSize);
 
   useEffect(() => {
     setSubcategoryPage((page) => Math.min(page, subcategoryTotalPages));
@@ -140,7 +144,13 @@ export const AdminCatalogManagementView: React.FC = () => {
     const controller = new AbortController();
     Promise.all([fetchAdminCategories(controller.signal), fetchAdminSubcategories(controller.signal)])
       .then(([apiCategories, apiSubs]) => {
-        setCategories(apiCategories as typeof categories);
+        // Normalize imageUrl -> image so category cards always show the image
+        const normalizedCats = (apiCategories as any[]).map((c: any) => ({
+          ...c,
+          image: c.image || c.imageUrl || c.image_url || undefined,
+          imageUrl: c.imageUrl || c.image || c.image_url || undefined,
+        }));
+        setCategories(normalizedCats as typeof categories);
         setApiSubcategories(apiSubs as any[]);
       })
       .catch((error) => { if (error.name !== 'AbortError') setCatalogError(error.message || 'Unable to load catalog data.'); });
@@ -148,13 +158,23 @@ export const AdminCatalogManagementView: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (activeSubSection === 'CATALOG_SUBCATEGORIES') return;
     const controller = new AbortController();
     setCatalogLoading(true);
     fetchAdminCatalog(controller.signal)
       .then(({ products: apiProducts, categories: apiCategories, subcategories: apiSubs, brands: apiBrands }) => {
-        const cats = (apiCategories || []) as typeof categories;
-        const subs = (apiSubs || []) as any[];
+        const cats = (apiCategories || []).map((c: any) => ({
+          ...c,
+          id: String(c.id || c._id || c.categoryId || c.category_id || c.name || ''),
+          name: String(c.name || c.title || c.categoryName || c.id || ''),
+          // Normalize imageUrl -> image so category cards always show the image
+          image: c.image || c.imageUrl || c.image_url || undefined,
+          imageUrl: c.imageUrl || c.image || c.image_url || undefined,
+        })) as typeof categories;
+        const subs = (apiSubs || []).map((s: any) => ({
+          ...s,
+          id: String(s.id || s._id || s.subcategoryId || s.subcategory_id || s.name || ''),
+          name: String(s.name || s.title || s.subcategoryName || s.subCategoryName || ''),
+        })) as any[];
         const mappedProducts = (apiProducts || []).map((p) => mapApiProductToProduct(p, cats, subs));
         setProducts(mappedProducts);
         setCategories(cats);
@@ -164,11 +184,21 @@ export const AdminCatalogManagementView: React.FC = () => {
         if (subs.length && cats.length) {
           const byCategory = new Map<string, string[]>();
           subs.forEach((item: any) => {
-            const parent = item.categoryId || item.category_id || item.category?.id;
-            const name = item.name || item.title;
-            if (parent && name) byCategory.set(parent, [...(byCategory.get(parent) || []), name]);
+            const parentId = item.categoryId || item.category_id || (typeof item.category === 'object' ? item.category?.id : (typeof item.category === 'string' ? item.category : ''));
+            const parentName = item.categoryName || item.category_name || (typeof item.category === 'object' ? item.category?.name : (typeof item.category === 'string' ? item.category : ''));
+            const name = item.name || item.title || item.subcategoryName;
+            if (parentId && name) byCategory.set(String(parentId), [...(byCategory.get(String(parentId)) || []), name]);
+            if (parentName && name) byCategory.set(String(parentName).toLowerCase(), [...(byCategory.get(String(parentName).toLowerCase()) || []), name]);
           });
-          setCategories((cats as any[]).map((category) => ({ ...category, subcategories: category.subcategories || byCategory.get(category.id) || [] })) as typeof categories);
+          setCategories((cats as any[]).map((category) => {
+            const catIdStr = String(category.id || '');
+            const catNameStr = String(category.name || '').toLowerCase();
+            const foundSubs = byCategory.get(catIdStr) || byCategory.get(catNameStr) || [];
+            return {
+              ...category,
+              subcategories: category.subcategories?.length ? category.subcategories : foundSubs,
+            };
+          }) as typeof categories);
         }
         setCatalogError('');
       })
@@ -181,13 +211,40 @@ export const AdminCatalogManagementView: React.FC = () => {
   const inputStyle: React.CSSProperties = { width: '100%', boxSizing: 'border-box', background: isDark ? 'rgba(30,41,59,.78)' : '#F8FAFC', border: `1px solid ${isDark ? '#334155' : '#CBD5E1'}`, borderRadius: 9, padding: '10px 12px', color: isDark ? '#F8FAFC' : '#0F172A', fontSize: 13, outline: 'none' };
   const badge = (kind: string): React.CSSProperties => ({ marginLeft: 'auto', fontSize: 9, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.03em', color: kind === 'required' ? '#60A5FA' : kind === 'recommended' ? '#34D399' : '#94A3B8' });
 
+  const [modalLoadingSubs, setModalLoadingSubs] = useState(false);
+
+  const fetchModalSubcategories = async (categoryId?: string) => {
+    if (!categoryId) return;
+    setModalLoadingSubs(true);
+    try {
+      const subs = await fetchAdminSubcategoriesByCategory(categoryId);
+      if (Array.isArray(subs) && subs.length > 0) {
+        setApiSubcategories((prev) => {
+          const map = new Map<string, any>();
+          prev.forEach((item) => { if (item) map.set(String(item.id || item._id || item.name), item); });
+          subs.forEach((item: any) => { if (item) map.set(String(item.id || item._id || item.name), item); });
+          return Array.from(map.values());
+        });
+      }
+    } catch (e) {
+      console.warn('Failed to fetch category subcategories:', e);
+    } finally {
+      setModalLoadingSubs(false);
+    }
+  };
+
   useEffect(() => {
     if (activeSubSection === 'CATALOG_ADD_PRODUCT') setShowProductModal(true);
   }, [activeSubSection]);
 
   useEffect(() => {
-    if (showProductModal && !productForm.categoryId && categories.length > 0) {
-      setProductForm((current) => ({ ...current, categoryId: categories[0].id, subcategoryId: '' }));
+    if (showProductModal) {
+      if (!productForm.categoryId && categories.length > 0) {
+        setProductForm((current) => ({ ...current, categoryId: categories[0].id, subcategoryId: '' }));
+        fetchModalSubcategories(categories[0].id);
+      } else if (productForm.categoryId) {
+        fetchModalSubcategories(productForm.categoryId);
+      }
     }
   }, [showProductModal, categories, productForm.categoryId]);
 
@@ -216,16 +273,26 @@ export const AdminCatalogManagementView: React.FC = () => {
     )
       return false;
     if (productCategoryFilter) {
-      const matchedCat = categories.find((c) => c.name === productCategoryFilter || c.id === productCategoryFilter);
+      const normCatFilter = productCategoryFilter.trim().toLowerCase();
+      const prodCat = String(product.category || '').trim().toLowerCase();
+      const prodCatId = String((product as any).categoryId || '').trim().toLowerCase();
+      const matchedCat = categories.find((c) => String(c.name || '').trim().toLowerCase() === normCatFilter || String(c.id || '').trim().toLowerCase() === normCatFilter);
+      const matchedCatName = String(matchedCat?.name || '').trim().toLowerCase();
+      const matchedCatId = String(matchedCat?.id || '').trim().toLowerCase();
+
       if (
-        product.category !== productCategoryFilter &&
-        product.category !== matchedCat?.name &&
-        (product as any).categoryId !== productCategoryFilter
+        prodCat !== normCatFilter &&
+        prodCat !== matchedCatName &&
+        prodCatId !== normCatFilter &&
+        prodCatId !== matchedCatId
       )
         return false;
     }
     if (productSubcategoryFilter) {
-      if (product.subcategory !== productSubcategoryFilter && (product as any).subcategoryId !== productSubcategoryFilter)
+      const normSubFilter = productSubcategoryFilter.trim().toLowerCase();
+      const prodSub = String(product.subcategory || '').trim().toLowerCase();
+      const prodSubId = String((product as any).subcategoryId || '').trim().toLowerCase();
+      if (prodSub !== normSubFilter && prodSubId !== normSubFilter)
         return false;
     }
     if (productStockFilter === 'IN_STOCK' && product.stock <= 0) return false;
@@ -239,28 +306,186 @@ export const AdminCatalogManagementView: React.FC = () => {
     return Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : GST_BY_CATEGORY[product.category] || 18;
   };
 
-  const getAvailableSubcategories = (catIdOrName: string) => {
-    const matchedCategory = categories.find((item) => item.id === catIdOrName || item.name === catIdOrName);
-    const categoryId = matchedCategory?.id || catIdOrName;
-    const categoryName = matchedCategory?.name || catIdOrName;
+  const getAvailableSubcategories = (catIdOrName?: string) => {
+    const norm = (s: unknown) => String(s || '').trim().toLowerCase();
+    const resultsMap = new Map<string, { id: string; name: string }>();
 
-    // Filter API-fetched subcategories by parent category (match by id or name)
-    const apiMatched = apiSubcategories.filter((sub: any) => {
-      const parentId = sub.categoryId || sub.category_id || sub.category?.id;
-      const parentName = sub.categoryName || sub.category?.name;
-      return (categoryId && parentId === categoryId) || (parentName && parentName === categoryName);
-    });
-
-    if (apiMatched.length > 0) {
-      return apiMatched.map((sub: any) => ({
-        id: sub.id || sub._id || sub.name,
-        name: sub.name || sub.title || 'Subcategory',
-      }));
+    // The product filter must reflect the subcategory directory/API only.
+    // Do not add legacy seeded names, product labels, or hard-coded defaults.
+    if (!catIdOrName || !catIdOrName.trim()) {
+      apiSubcategories.forEach((sub: any) => {
+        if (!sub || sub.isActive === false || ['inactive', 'archived'].includes(norm(sub.status))) return;
+        const name = String(sub.name || sub.subcategoryName || sub.title || sub.subCategoryName || '').trim();
+        const id = String(sub.id || sub._id || sub.subcategoryId || sub.subcategory_id || name).trim();
+        if (name && id && !resultsMap.has(norm(name))) resultsMap.set(norm(name), { id, name });
+      });
+      return Array.from(resultsMap.values());
     }
 
-    // Fallback to local names if no API subcategories matched
-    const nameList = Array.from(new Set([...(DEFAULT_SUBCATEGORIES[categoryName] || []), ...(matchedCategory?.subcategories || [])]));
-    return nameList.map((name) => ({ id: name, name }));
+    // If no category is selected, return ALL subcategories available across the entire catalog
+    if (!catIdOrName || !catIdOrName.trim()) {
+      apiSubcategories.forEach((sub: any) => {
+        if (!sub) return;
+        const subName = String(sub.name || sub.subcategoryName || sub.title || sub.subCategoryName || '').trim();
+        const subId = String(sub.id || sub._id || sub.subcategoryId || sub.subcategory_id || subName).trim();
+        if (subName && !resultsMap.has(subName.toLowerCase())) {
+          resultsMap.set(subName.toLowerCase(), { id: subId, name: subName });
+        }
+      });
+
+      categories.forEach((cat: any) => {
+        if (cat?.subcategories && Array.isArray(cat.subcategories)) {
+          cat.subcategories.forEach((item: any) => {
+            if (typeof item === 'string' && item.trim()) {
+              const name = item.trim();
+              if (!resultsMap.has(name.toLowerCase())) {
+                resultsMap.set(name.toLowerCase(), { id: name, name });
+              }
+            } else if (item && typeof item === 'object') {
+              const name = String(item.name || item.title || item.subcategoryName || '').trim();
+              const id = String(item.id || item._id || name).trim();
+              if (name && !resultsMap.has(name.toLowerCase())) {
+                resultsMap.set(name.toLowerCase(), { id: id || name, name });
+              }
+            }
+          });
+        }
+      });
+
+      products.forEach((prod) => {
+        const sub = prod.subcategory?.trim();
+        if (sub && sub !== '—' && sub !== '-' && !resultsMap.has(sub.toLowerCase())) {
+          resultsMap.set(sub.toLowerCase(), { id: sub, name: sub });
+        }
+      });
+
+      Object.values(DEFAULT_SUBCATEGORIES).forEach((subs) => {
+        subs.forEach((name) => {
+          if (name && !resultsMap.has(name.toLowerCase())) {
+            resultsMap.set(name.toLowerCase(), { id: name, name });
+          }
+        });
+      });
+
+      return Array.from(resultsMap.values());
+    }
+
+    const searchVal = norm(catIdOrName);
+
+    // 1. Match category object
+    const matchedCategory: any = categories.find((item: any) =>
+      norm(item.id) === searchVal ||
+      norm(item._id) === searchVal ||
+      norm(item.name) === searchVal ||
+      norm(item.title) === searchVal
+    );
+
+    const catId = matchedCategory?.id || matchedCategory?._id || catIdOrName;
+    const catName = matchedCategory?.name || matchedCategory?.title || catIdOrName;
+    const targetIdNorm = norm(catId);
+    const targetNameNorm = norm(catName);
+
+    // 2. Search in apiSubcategories list
+    apiSubcategories.forEach((sub: any) => {
+      if (!sub || sub.isActive === false || ['inactive', 'archived'].includes(norm(sub.status))) return;
+
+      const subId = String(sub.id || sub._id || sub.subcategoryId || sub.subcategory_id || '').trim();
+      const subName = String(sub.name || sub.subcategoryName || sub.title || sub.subCategoryName || '').trim();
+      if (!subName) return;
+
+      const parentId = String(
+        sub.categoryId ||
+        sub.category_id ||
+        sub.parentCategoryId ||
+        sub.parent_category_id ||
+        (typeof sub.category === 'object' ? (sub.category?.id || sub.category?.categoryId || sub.category?._id) : '') ||
+        (typeof sub.parentCategory === 'object' ? sub.parentCategory?.id : '') ||
+        (typeof sub.category === 'string' && sub.category.startsWith('cat_') ? sub.category : '') ||
+        ''
+      ).trim();
+
+      const parentName = String(
+        sub.categoryName ||
+        sub.category_name ||
+        sub.parentCategoryName ||
+        (typeof sub.category === 'object' ? (sub.category?.name || sub.category?.title) : '') ||
+        (typeof sub.parentCategory === 'object' ? (sub.parentCategory?.name || sub.parentCategory?.title) : '') ||
+        (typeof sub.category === 'string' && !sub.category.startsWith('cat_') ? sub.category : '') ||
+        ''
+      ).trim();
+
+      const isIdMatch = targetIdNorm && parentId && (norm(parentId) === targetIdNorm || norm(parentId) === searchVal);
+      const isNameMatch = targetNameNorm && parentName && (norm(parentName) === targetNameNorm || norm(parentName) === searchVal);
+      const isDirectStringMatch = typeof sub.category === 'string' && (norm(sub.category) === targetIdNorm || norm(sub.category) === targetNameNorm || norm(sub.category) === searchVal);
+
+      if (isIdMatch || isNameMatch || isDirectStringMatch) {
+        resultsMap.set(subName.toLowerCase(), {
+          id: subId || subName,
+          name: subName,
+        });
+      }
+    });
+
+    // 3. Check if category object has embedded subcategories
+    if (apiSubcategories.length === 0 && matchedCategory?.subcategories && Array.isArray(matchedCategory.subcategories)) {
+      matchedCategory.subcategories.forEach((item: any) => {
+        if (typeof item === 'string' && item.trim()) {
+          const name = item.trim();
+          if (!resultsMap.has(name.toLowerCase())) {
+            resultsMap.set(name.toLowerCase(), { id: name, name });
+          }
+        } else if (item && typeof item === 'object') {
+          const name = String(item.name || item.title || item.subcategoryName || '').trim();
+          const id = String(item.id || item._id || name).trim();
+          if (name && !resultsMap.has(name.toLowerCase())) {
+            resultsMap.set(name.toLowerCase(), { id: id || name, name });
+          }
+        }
+      });
+    }
+
+    // Product names are not catalog subcategory records and must not populate this dropdown.
+    if (false) products.forEach((prod) => {
+      const prodCatNorm = norm(prod.category);
+      if (prodCatNorm === targetNameNorm || prodCatNorm === targetIdNorm || prodCatNorm === searchVal) {
+        const sub = prod.subcategory?.trim();
+        if (sub && sub !== '—' && sub !== '-' && !resultsMap.has(sub.toLowerCase())) {
+          resultsMap.set(sub.toLowerCase(), { id: sub, name: sub });
+        }
+      }
+    });
+
+    // Hard-coded defaults are display fallbacks only, never product form options.
+    if (false) Object.entries(DEFAULT_SUBCATEGORIES).forEach(([dCat, dSubs]) => {
+      if (norm(dCat) === targetNameNorm || norm(dCat) === searchVal || targetNameNorm.includes(norm(dCat)) || norm(dCat).includes(targetNameNorm)) {
+        dSubs.forEach((name) => {
+          if (name && !resultsMap.has(name.toLowerCase())) {
+            resultsMap.set(name.toLowerCase(), { id: name, name });
+          }
+        });
+      }
+    });
+
+    // 6. If no subcategories matched this specific category, provide all available catalog subcategories so the dropdown always has options
+    if (false && resultsMap.size === 0) {
+      apiSubcategories.forEach((sub: any) => {
+        if (!sub) return;
+        const subName = String(sub.name || sub.subcategoryName || sub.title || sub.subCategoryName || '').trim();
+        const subId = String(sub.id || sub._id || sub.subcategoryId || sub.subcategory_id || subName).trim();
+        if (subName && !resultsMap.has(subName.toLowerCase())) {
+          resultsMap.set(subName.toLowerCase(), { id: subId, name: subName });
+        }
+      });
+      Object.values(DEFAULT_SUBCATEGORIES).forEach((subs) => {
+        subs.forEach((name) => {
+          if (name && !resultsMap.has(name.toLowerCase())) {
+            resultsMap.set(name.toLowerCase(), { id: name, name });
+          }
+        });
+      });
+    }
+
+    return Array.from(resultsMap.values());
   };
 
   const getCommissionRate = (product: Product) => categories.find((category) => category.name === product.category || category.id === (product as any).categoryId)?.commissionRate || 2.5;
@@ -307,21 +532,24 @@ export const AdminCatalogManagementView: React.FC = () => {
     setProductSuccess('');
 
     try {
-      const finalImageUrl = productForm.imageUrl.trim() || imagePreview || PRODUCT_IMAGE_FALLBACK;
+      const finalImageUrl = productForm.imageUrl.trim() || imagePreview || undefined;
+      const priceNum = Number(productForm.price) || 0;
+      const mrpNum = productForm.mrp && Number(productForm.mrp) > 0 ? Number(productForm.mrp) : priceNum;
+      const autoSku = productForm.sku?.trim() || `${productForm.productName.trim().toUpperCase().replace(/[^A-Z0-9]/g, '-').slice(0, 10)}-${Date.now().toString().slice(-4)}`;
 
       const payload: AdminProductPayload = {
         productName: productForm.productName.trim(),
         categoryId: productForm.categoryId,
-        ...(productForm.subcategoryId ? { subcategoryId: productForm.subcategoryId } : {}),
+        ...(productForm.subcategoryId?.trim() ? { subcategoryId: productForm.subcategoryId.trim() } : {}),
         brand: productForm.brand.trim() || 'KFPCL',
-        price: Number(productForm.price) || 0,
-        ...(productForm.mrp ? { mrp: Number(productForm.mrp) } : {}),
+        price: priceNum,
+        mrp: mrpNum,
         ...(productForm.discount ? { discount: Number(productForm.discount) } : {}),
         quantity: Number(productForm.quantity) || 1,
         unit: productForm.unit || 'kg',
         stockQuantity: Number(productForm.stockQuantity) || 0,
-        ...(productForm.sku?.trim() ? { sku: productForm.sku.trim() } : {}),
-        ...(productForm.description?.trim() ? { description: productForm.description.trim() } : {}),
+        sku: autoSku,
+        description: productForm.description?.trim() || `${productForm.productName.trim()} by ${productForm.brand.trim() || 'KFPCL'}.`,
         ...(finalImageUrl ? { imageUrl: finalImageUrl } : {}),
         status: productForm.status === 'Active' ? 'ACTIVE' : 'DRAFT',
       };
@@ -393,18 +621,30 @@ export const AdminCatalogManagementView: React.FC = () => {
     if (!name) return;
     setCategorySubmitting(true);
     setCatalogError('');
+    // Capture the local preview URL before clearing it
+    const localImagePreview = categoryImage || '';
     try {
-      const imageUrl = categoryImage.startsWith('http://') || categoryImage.startsWith('https://') ? categoryImage : undefined;
+      const remoteImageUrl = categoryImage.startsWith('http://') || categoryImage.startsWith('https://') ? categoryImage : undefined;
       const created = await createAdminCategory({
         name,
-        ...(imageUrl ? { imageUrl } : {}),
+        ...(remoteImageUrl ? { imageUrl: remoteImageUrl } : {}),
         ...(categoryDescription.trim() ? { description: categoryDescription.trim() } : {}),
         displayOrder: Number(categoryDisplayOrder) || 0,
         discount: Number(categoryDiscount) || 0,
         isActive: categoryIsActive,
         status: categoryIsActive ? 'ACTIVE' : 'INACTIVE',
       });
-      const record = (created as any)?.id ? created as any : { ...(created as any), name };
+      // Merge the created record with local preview image so the card shows it immediately.
+      // The API returns imageUrl on success; if not, we fall back to the local blob/data URL.
+      const createdRecord = (created as any)?.id ? (created as any) : { ...(created as any), name };
+      const record = {
+        ...createdRecord,
+        // Prefer API-returned imageUrl, fall back to the local preview captured above
+        image: createdRecord.image || createdRecord.imageUrl || localImagePreview || undefined,
+        imageUrl: createdRecord.imageUrl || createdRecord.image || localImagePreview || undefined,
+        icon: createdRecord.icon || 'package',
+        count: createdRecord.count || '0 Products',
+      };
       setCategories([...categories, record]);
       setShowCategoryModal(false);
       setProductForm({ productName: '', category: '', subcategory: '', brand: '', description: '', image: '', price: '', mrp: '', discount: '', quantity: '', unit: 'piece', stock: '', status: 'Active', sku: '' });
@@ -509,11 +749,42 @@ export const AdminCatalogManagementView: React.FC = () => {
     }
   };
 
-  const catalogTabs: TabItem[] = [
-    { id: 'CATALOG_CATEGORIES', label: 'Categories', badge: categories.length },
-    { id: 'CATALOG_SUBCATEGORIES', label: 'Subcategories', badge: apiSubcategories.length },
-    { id: 'CATALOG_PRODUCTS', label: 'Products', badge: products.length },
-  ];
+  const handleDeleteSubcategory = async (id: string, name?: string) => {
+    if (!id) return;
+    const displayName = name || id;
+    if (!window.confirm(`Delete subcategory "${displayName}"? This action cannot be undone.`)) return;
+    setDeletingSubcategoryId(id);
+    setCatalogError('');
+    try {
+      await deleteAdminSubcategory(id);
+      setApiSubcategories((prev) => {
+        const next = prev.filter((item) => {
+          const itemId = String(item.id || item._id || item.subcategoryId || item.subcategory_id || '');
+          const itemName = item.name || item.title || item.subcategoryName;
+          return itemId !== id && itemName !== displayName && itemName !== id;
+        });
+        return next;
+      });
+      setCategories((prevCategories) =>
+        prevCategories.map((cat) => {
+          if (!cat.subcategories || !Array.isArray(cat.subcategories)) return cat;
+          return {
+            ...cat,
+            subcategories: cat.subcategories.filter((sub: any) => {
+              if (typeof sub === 'string') return sub !== displayName && sub !== id;
+              const sId = String(sub.id || sub._id || sub.subcategoryId || sub.subcategory_id || '');
+              return sId !== id && sub.name !== displayName && sub.name !== id;
+            }),
+          };
+        })
+      );
+      setSubcategorySuccess(`Subcategory "${displayName}" deleted successfully.`);
+    } catch (error) {
+      setCatalogError(error instanceof Error ? error.message : 'Unable to delete subcategory.');
+    } finally {
+      setDeletingSubcategoryId('');
+    }
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -543,96 +814,177 @@ export const AdminCatalogManagementView: React.FC = () => {
         @media (max-width: 1100px) { .product-filter-card { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; } .product-filter-card > div:first-child { grid-column: 1 / -1; } }
         @media (max-width: 640px) { .product-filter-card { grid-template-columns: 1fr !important; } .product-filter-card > div:first-child { grid-column: auto; } }
       `}</style>
-      {/* Tab bar and Add Action button row */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-        <PageTabs
-          tabs={catalogTabs}
-          activeTabId={currentTab}
-          onChangeTab={(id) => {
-            setProductSuccess('');
-            setCatalogError('');
-            setActiveSubSection(id as any);
-          }}
-          theme={theme}
-        />
-
-        {currentTab === 'CATALOG_CATEGORIES' && (
-          <button
-            onClick={() => setShowCategoryModal(true)}
-            style={{
-              background: 'linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)',
-              border: 'none',
-              borderRadius: 10,
-              padding: '8px 14px',
-              color: '#FFF',
-              fontSize: 12,
-              fontWeight: 800,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              cursor: 'pointer',
-              boxShadow: '0 4px 12px rgba(37, 99, 235, 0.25)',
-            }}
-          >
-            <Plus size={14} />
-            <span>Add Category</span>
-          </button>
-        )}
-
-        {currentTab === 'CATALOG_PRODUCTS' && (
-          <button
-            onClick={() => {
-              if (categories.length > 0 && !productForm.categoryId) {
-                setProductForm((prev) => ({ ...prev, categoryId: categories[0].id }));
-              }
-              setShowProductModal(true);
-            }}
-            style={{
-              background: 'linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)',
-              border: 'none',
-              borderRadius: 10,
-              padding: '8px 16px',
-              color: '#FFF',
-              fontSize: 12,
-              fontWeight: 800,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              cursor: 'pointer',
-              boxShadow: '0 4px 12px rgba(37, 99, 235, 0.25)',
-            }}
-          >
-            <Plus size={14} />
-            <span>Add Product</span>
-          </button>
-        )}
-      </div>
-
+      {/* ─── TAB: SUBCATEGORIES ────────────────────────────────────────── */}
       {currentTab === 'CATALOG_SUBCATEGORIES' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div style={{ background: isDark ? 'rgba(15,23,42,.82)' : '#FFF', border: `1px solid ${isDark ? 'rgba(96,165,250,.25)' : '#DBEAFE'}`, borderRadius: 16, padding: 20 }}>
-            <div style={{ marginBottom: 16 }}><div style={{ color: '#60A5FA', fontSize: 10, fontWeight: 850, letterSpacing: '.1em', textTransform: 'uppercase' }}>Catalog structure</div><h3 style={{ color: isDark ? '#FFF' : '#0F172A', margin: '5px 0 3px', fontSize: 19 }}>Subcategories</h3><p style={{ color: '#94A3B8', margin: 0, fontSize: 12 }}>Add subcategories under an existing category.</p></div>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ color: '#60A5FA', fontSize: 10, fontWeight: 850, letterSpacing: '.1em', textTransform: 'uppercase' }}>Catalog structure</div>
+              <h3 style={{ color: isDark ? '#FFF' : '#0F172A', margin: '5px 0 3px', fontSize: 19 }}>Subcategories</h3>
+              <p style={{ color: '#94A3B8', margin: 0, fontSize: 12 }}>Add subcategories under an existing category.</p>
+            </div>
             <form onSubmit={handleAddSubcategory} style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 12, alignItems: 'end' }}>
-              <div><label style={fieldLabel}>Parent category<span style={badge('required')}>Required</span></label><select required value={subcategoryCategory} onChange={(e) => { setSubcategoryCategory(e.target.value); setCatalogError(''); }} style={inputStyle}><option value="">Select active category</option>{activeCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select>{!activeCategories.length && <small style={{ display: 'block', marginTop: 5, color: '#DC2626' }}>No active categories are available.</small>}</div>
-              <div><label style={fieldLabel}>Subcategory name<span style={badge('required')}>Required</span></label><input required value={subcategoryName} onChange={(e) => setSubcategoryName(e.target.value)} placeholder="e.g. Milk" style={inputStyle} /></div>
-              <label style={{ height: 40, border: `1px dashed ${isDark ? '#475569' : '#CBD5E1'}`, background: isDark ? 'rgba(30,41,59,.6)' : '#F8FAFC', borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, cursor: 'pointer', overflow: 'hidden', color: '#94A3B8', fontSize: 11 }}>{subcategoryImage ? <img src={subcategoryImage} alt="Subcategory preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <><ImageIcon size={16} color="#60A5FA" />Upload image</>}<input type="file" accept="image/*" onChange={(e) => { const file = e.target.files?.[0]; if (file) setSubcategoryImage(URL.createObjectURL(file)); }} style={{ display: 'none' }} /></label>
-              <div style={{ gridColumn: '1 / -1' }}><label style={fieldLabel}>Description<span style={badge('optional')}>Optional</span></label><textarea value={subcategoryDescription} onChange={(e) => setSubcategoryDescription(e.target.value)} placeholder="Describe this subcategory" rows={2} style={{ ...inputStyle, resize: 'vertical' }} /></div>
-              <div><label style={fieldLabel}>Display order<span style={badge('optional')}>Optional</span></label><input type="number" min="0" value={subcategoryDisplayOrder} onChange={(e) => setSubcategoryDisplayOrder(e.target.value)} style={inputStyle} /></div>
-              <div><label style={fieldLabel}>Discount (%)<span style={badge('optional')}>Optional</span></label><input type="number" min="0" max="100" value={subcategoryDiscount} onChange={(e) => setSubcategoryDiscount(e.target.value)} style={inputStyle} /></div>
-              <label style={{ height: 40, display: 'flex', alignItems: 'center', gap: 9, color: isDark ? '#E2E8F0' : '#334155', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}><input type="checkbox" checked={subcategoryIsActive} onChange={(e) => setSubcategoryIsActive(e.target.checked)} style={{ width: 17, height: 17, accentColor: '#2563EB' }} />Active subcategory</label>
-              <button type="submit" disabled={subcategorySubmitting} style={{ height: 40, border: 0, borderRadius: 9, padding: '0 18px', background: subcategorySubmitting ? '#93C5FD' : '#2563EB', color: '#FFF', fontSize: 12, fontWeight: 800, cursor: subcategorySubmitting ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}><Plus size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />{subcategorySubmitting ? 'Creating…' : 'Add subcategory'}</button>
+              <div>
+                <label style={fieldLabel}>Parent category<span style={badge('required')}>Required</span></label>
+                <select required value={subcategoryCategory} onChange={(e) => { setSubcategoryCategory(e.target.value); setCatalogError(''); }} style={inputStyle}>
+                  <option value="">Select active category</option>
+                  {activeCategories.map((category) => (
+                    <option key={category.id} value={category.id}>{category.name}</option>
+                  ))}
+                </select>
+                {!activeCategories.length && <small style={{ display: 'block', marginTop: 5, color: '#DC2626' }}>No active categories are available.</small>}
+              </div>
+              <div>
+                <label style={fieldLabel}>Subcategory name<span style={badge('required')}>Required</span></label>
+                <input required value={subcategoryName} onChange={(e) => setSubcategoryName(e.target.value)} placeholder="e.g. Milk" style={inputStyle} />
+              </div>
+              <label style={{ height: 40, border: `1px dashed ${isDark ? '#475569' : '#CBD5E1'}`, background: isDark ? 'rgba(30,41,59,.6)' : '#F8FAFC', borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, cursor: 'pointer', overflow: 'hidden', color: '#94A3B8', fontSize: 11 }}>
+                {subcategoryImage ? <img src={subcategoryImage} alt="Subcategory preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <><ImageIcon size={16} color="#60A5FA" />Upload image</>}
+                <input type="file" accept="image/*" onChange={(e) => { const file = e.target.files?.[0]; if (file) setSubcategoryImage(URL.createObjectURL(file)); }} style={{ display: 'none' }} />
+              </label>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <label style={fieldLabel}>Description<span style={badge('optional')}>Optional</span></label>
+                <textarea value={subcategoryDescription} onChange={(e) => setSubcategoryDescription(e.target.value)} placeholder="Describe this subcategory" rows={2} style={{ ...inputStyle, resize: 'vertical' }} />
+              </div>
+              <div>
+                <label style={fieldLabel}>Display order<span style={badge('optional')}>Optional</span></label>
+                <input type="number" min="0" value={subcategoryDisplayOrder} onChange={(e) => setSubcategoryDisplayOrder(e.target.value)} style={inputStyle} />
+              </div>
+              <div>
+                <label style={fieldLabel}>Discount (%)<span style={badge('optional')}>Optional</span></label>
+                <input type="number" min="0" max="100" value={subcategoryDiscount} onChange={(e) => setSubcategoryDiscount(e.target.value)} style={inputStyle} />
+              </div>
+              <label style={{ height: 40, display: 'flex', alignItems: 'center', gap: 9, color: isDark ? '#E2E8F0' : '#334155', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                <input type="checkbox" checked={subcategoryIsActive} onChange={(e) => setSubcategoryIsActive(e.target.checked)} style={{ width: 17, height: 17, accentColor: '#2563EB' }} />
+                Active subcategory
+              </label>
+              <button type="submit" disabled={subcategorySubmitting} style={{ height: 40, border: 0, borderRadius: 9, padding: '0 18px', background: subcategorySubmitting ? '#93C5FD' : '#2563EB', color: '#FFF', fontSize: 12, fontWeight: 800, cursor: subcategorySubmitting ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}>
+                <Plus size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+                {subcategorySubmitting ? 'Creating…' : 'Add subcategory'}
+              </button>
             </form>
           </div>
           <div style={{ background: isDark ? 'rgba(15,23,42,.82)' : '#FFF', border: `1px solid ${isDark ? 'rgba(148,163,184,.16)' : '#E2E8F0'}`, borderRadius: 16, overflow: 'hidden' }}>
-            <div style={{ padding: '14px 18px', color: isDark ? '#F8FAFC' : '#0F172A', fontSize: 13, fontWeight: 800, borderBottom: `1px solid ${isDark ? 'rgba(148,163,184,.14)' : '#E2E8F0'}` }}>Subcategory directory</div>
-            {apiSubcategories.length ? <>{visibleSubcategories.map((subcategory) => <div key={subcategory.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 18px', borderBottom: `1px solid ${isDark ? 'rgba(148,163,184,.1)' : '#F1F5F9'}`, color: isDark ? '#E2E8F0' : '#334155', fontSize: 12 }}><div style={{ width: 30, height: 30, borderRadius: 8, overflow: 'hidden', background: isDark ? '#1E293B' : '#F1F5F9', display: 'grid', placeItems: 'center' }}>{subcategory.imageUrl ? <img src={subcategory.imageUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <ImageIcon size={14} color="#60A5FA" />}</div><span style={{ flex: 1 }}>{subcategory.name}</span><span style={{ color: '#94A3B8' }}>{subcategory.categoryName || subcategory.category?.name || subcategory.categoryId || '—'}</span></div>)}{apiSubcategories.length > subcategoryPageSize && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '12px 18px', color: '#94A3B8', fontSize: 11 }}><span>Showing {(subcategoryPage - 1) * subcategoryPageSize + 1}–{Math.min(subcategoryPage * subcategoryPageSize, apiSubcategories.length)} of {apiSubcategories.length}</span><div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><button type="button" disabled={subcategoryPage === 1} onClick={() => setSubcategoryPage((page) => page - 1)} style={{ border: `1px solid ${isDark ? '#334155' : '#CBD5E1'}`, borderRadius: 7, background: 'transparent', color: isDark ? '#E2E8F0' : '#334155', padding: '5px 9px', cursor: subcategoryPage === 1 ? 'not-allowed' : 'pointer', opacity: subcategoryPage === 1 ? .45 : 1 }}>Previous</button><span style={{ minWidth: 52, textAlign: 'center', color: isDark ? '#F8FAFC' : '#0F172A', fontWeight: 700 }}>Page {subcategoryPage} / {subcategoryTotalPages}</span><button type="button" disabled={subcategoryPage === subcategoryTotalPages} onClick={() => setSubcategoryPage((page) => page + 1)} style={{ border: 0, borderRadius: 7, background: '#2563EB', color: '#FFF', padding: '6px 10px', cursor: subcategoryPage === subcategoryTotalPages ? 'not-allowed' : 'pointer', opacity: subcategoryPage === subcategoryTotalPages ? .45 : 1 }}>Next</button></div></div>}</> : <div style={{ padding: 22, textAlign: 'center', color: '#94A3B8', fontSize: 12 }}>No subcategories available.</div>}
+            <div style={{ padding: '14px 18px', color: isDark ? '#F8FAFC' : '#0F172A', fontSize: 13, fontWeight: 800, borderBottom: `1px solid ${isDark ? 'rgba(148,163,184,.14)' : '#E2E8F0'}` }}>
+              Subcategory directory ({apiSubcategories.length})
+            </div>
+            {apiSubcategories.length ? (
+              <>
+                {visibleSubcategories.map((subcategory) => {
+                  const subId = String(subcategory.id || subcategory._id || subcategory.subcategoryId || subcategory.subcategory_id || '');
+                  const subName = subcategory.name || subcategory.title || subcategory.subcategoryName || 'Subcategory';
+                  const parentCatName = subcategory.categoryName || subcategory.category?.name || subcategory.categoryId || '—';
+                  const isDeleting = deletingSubcategoryId === (subId || subName);
+
+                  return (
+                    <div
+                      key={subId || subName}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        padding: '10px 18px',
+                        borderBottom: `1px solid ${isDark ? 'rgba(148,163,184,.1)' : '#F1F5F9'}`,
+                        color: isDark ? '#E2E8F0' : '#334155',
+                        fontSize: 12,
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: 30,
+                          height: 30,
+                          borderRadius: 8,
+                          overflow: 'hidden',
+                          background: isDark ? '#1E293B' : '#F1F5F9',
+                          display: 'grid',
+                          placeItems: 'center',
+                          flexShrink: 0,
+                        }}
+                      >
+                        {subcategory.imageUrl ? (
+                          <img src={subcategory.imageUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        ) : (
+                          <ImageIcon size={14} color="#60A5FA" />
+                        )}
+                      </div>
+                      <span style={{ flex: 1, fontWeight: 600 }}>{subName}</span>
+                      <span style={{ color: '#94A3B8' }}>{parentCatName}</span>
+                      <button
+                        type="button"
+                        title={`Delete ${subName}`}
+                        aria-label={`Delete ${subName}`}
+                        disabled={isDeleting || !subId}
+                        onClick={() => handleDeleteSubcategory(subId || subName, subName)}
+                        style={{
+                          width: 28,
+                          height: 28,
+                          display: 'grid',
+                          placeItems: 'center',
+                          background: 'transparent',
+                          border: 0,
+                          borderRadius: 7,
+                          color: '#EF4444',
+                          cursor: isDeleting ? 'wait' : 'pointer',
+                          opacity: isDeleting ? 0.5 : 1,
+                          flexShrink: 0,
+                          marginLeft: 4,
+                        }}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  );
+                })}
+                {apiSubcategories.length > subcategoryPageSize && (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '12px 18px', color: '#94A3B8', fontSize: 11 }}>
+                    <span>Showing {(subcategoryPage - 1) * subcategoryPageSize + 1}–{Math.min(subcategoryPage * subcategoryPageSize, apiSubcategories.length)} of {apiSubcategories.length}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <button type="button" disabled={subcategoryPage === 1} onClick={() => setSubcategoryPage((page) => page - 1)} style={{ border: `1px solid ${isDark ? '#334155' : '#CBD5E1'}`, borderRadius: 7, background: 'transparent', color: isDark ? '#E2E8F0' : '#334155', padding: '5px 9px', cursor: subcategoryPage === 1 ? 'not-allowed' : 'pointer', opacity: subcategoryPage === 1 ? .45 : 1 }}>Previous</button>
+                      <span style={{ minWidth: 52, textAlign: 'center', color: isDark ? '#F8FAFC' : '#0F172A', fontWeight: 700 }}>Page {subcategoryPage} / {subcategoryTotalPages}</span>
+                      <button type="button" disabled={subcategoryPage === subcategoryTotalPages} onClick={() => setSubcategoryPage((page) => page + 1)} style={{ border: 0, borderRadius: 7, background: '#2563EB', color: '#FFF', padding: '6px 10px', cursor: subcategoryPage === subcategoryTotalPages ? 'not-allowed' : 'pointer', opacity: subcategoryPage === subcategoryTotalPages ? .45 : 1 }}>Next</button>
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div style={{ padding: 22, textAlign: 'center', color: '#94A3B8', fontSize: 12 }}>No subcategories available.</div>
+            )}
           </div>
         </div>
       )}
 
       {/* ─── TAB: CATEGORIES ────────────────────────────────────────────── */}
       {currentTab === 'CATALOG_CATEGORIES' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', gap: 16 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ background: isDark ? 'rgba(15,23,42,.82)' : '#FFF', border: `1px solid ${isDark ? 'rgba(96,165,250,.25)' : '#DBEAFE'}`, borderRadius: 16, padding: '20px 22px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+            <div>
+              <h2 style={{ margin: 0, color: isDark ? '#A5B4FC' : '#3730A3', fontSize: 22 }}>Categories</h2>
+              <p style={{ margin: '5px 0 0', color: '#94A3B8', fontSize: 11 }}>{categories.length} categories · Manage product hierarchy and discounts</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowCategoryModal(true)}
+              style={{
+                border: 0,
+                borderRadius: 22,
+                padding: '11px 20px',
+                background: 'linear-gradient(135deg,#2563EB,#1D4ED8)',
+                color: '#FFF',
+                fontSize: 13,
+                fontWeight: 800,
+                cursor: 'pointer',
+                boxShadow: '0 4px 14px rgba(37,99,235,.35)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              <Plus size={16} />
+              <span>Add Category</span>
+            </button>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', gap: 16 }}>
           {categories.map((c) => (
             <div
               key={c.id}
@@ -657,7 +1009,7 @@ export const AdminCatalogManagementView: React.FC = () => {
             >
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}><div style={{ width: 34, height: 34, borderRadius: 9, overflow: 'hidden', background: isDark ? '#1E293B' : '#F1F5F9', display: 'grid', placeItems: 'center' }}>{c.image ? <img src={c.image} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <Package size={16} color="#60A5FA" />}</div><h4 style={{ fontSize: 17, fontWeight: 800, color: isDark ? '#F8FAFC' : '#0F172A', margin: 0 }}>{c.name}</h4></div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}><div style={{ width: 34, height: 34, borderRadius: 9, overflow: 'hidden', background: isDark ? '#1E293B' : '#F1F5F9', display: 'grid', placeItems: 'center' }}>{(c.image || (c as any).imageUrl) ? <><img src={c.image || (c as any).imageUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} onError={(e) => { e.currentTarget.style.display = 'none'; const next = e.currentTarget.nextElementSibling as HTMLElement; if (next) next.style.display = 'grid'; }} /><Package size={16} color="#60A5FA" style={{ display: 'none' }} /></> : <Package size={16} color="#60A5FA" />}</div><h4 style={{ fontSize: 17, fontWeight: 800, color: isDark ? '#F8FAFC' : '#0F172A', margin: 0 }}>{c.name}</h4></div>
                   <div style={{ display: 'flex', gap: 5 }}>
                     <button aria-label={`Edit ${c.name}`} onClick={(e) => { e.stopPropagation(); setEditingCategory(c); }} style={{ width: 28, height: 28, display: 'grid', placeItems: 'center', background: isDark ? 'rgba(59,130,246,.14)' : '#EFF6FF', border: 0, borderRadius: 7, color: '#3B82F6', cursor: 'pointer' }}><Pencil size={13} /></button>
                     <button aria-label={`Delete ${c.name}`} disabled={deletingCategoryId === c.id} onClick={(e) => { e.stopPropagation(); handleDeleteCategory(c.id); }} style={{ width: 28, height: 28, display: 'grid', placeItems: 'center', background: 'transparent', border: 0, borderRadius: 7, color: '#EF4444', cursor: deletingCategoryId === c.id ? 'wait' : 'pointer', opacity: deletingCategoryId === c.id ? 0.5 : 1 }}><Trash2 size={14} /></button>
@@ -682,6 +1034,7 @@ export const AdminCatalogManagementView: React.FC = () => {
               </div>
             </div>
           ))}
+        </div>
         </div>
       )}
 
@@ -765,7 +1118,7 @@ export const AdminCatalogManagementView: React.FC = () => {
             <div>
               <label style={{ color: '#BFDBFE', fontSize: 9, display: 'block', margin: '0 0 4px 8px' }}>Subcategory</label>
               <select value={productSubcategoryFilter} onChange={(e) => setProductSubcategoryFilter(e.target.value)} style={{ ...inputStyle, borderRadius: 22, padding: '9px 12px', background: isDark ? '#062C57' : '#FFF', borderColor: isDark ? '#1D5A97' : '#BFDBFE' }}>
-                <option value="">{productCategoryFilter ? 'All Subcategories' : 'Select Category First'}</option>
+                <option value="">All Subcategories</option>
                 {getAvailableSubcategories(productCategoryFilter).map((sub) => (
                   <option key={sub.id} value={sub.name}>{sub.name}</option>
                 ))}
@@ -804,12 +1157,32 @@ export const AdminCatalogManagementView: React.FC = () => {
                     <tr key={p.id} className="catalog-data-row" style={{ borderBottom: `1px solid ${isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)'}` }}>
                       <td style={{ padding: '12px 14px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                          <img
-                            src={p.images?.[0] || p.image || PRODUCT_IMAGE_FALLBACK}
-                            alt={p.title}
-                            onError={(event) => { event.currentTarget.src = PRODUCT_IMAGE_FALLBACK; }}
-                            style={{ width: 44, height: 44, borderRadius: 8, objectFit: 'cover', background: '#E2E8F0', flexShrink: 0 }}
-                          />
+                          {p.images?.[0] || p.image ? (
+                            <img
+                              src={formatProductImageUrl(p.images?.[0] || p.image)}
+                              alt={p.title}
+                              onError={(event) => {
+                                event.currentTarget.style.display = 'none';
+                                const next = event.currentTarget.nextElementSibling as HTMLElement;
+                                if (next) next.style.display = 'grid';
+                              }}
+                              style={{ width: 44, height: 44, borderRadius: 8, objectFit: 'cover', background: isDark ? '#1E293B' : '#F1F5F9', flexShrink: 0 }}
+                            />
+                          ) : null}
+                          <div
+                            style={{
+                              width: 44,
+                              height: 44,
+                              borderRadius: 8,
+                              background: isDark ? 'rgba(30,41,59,.8)' : '#EFF6FF',
+                              border: `1px solid ${isDark ? 'rgba(59,130,246,.25)' : '#DBEAFE'}`,
+                              display: p.images?.[0] || p.image ? 'none' : 'grid',
+                              placeItems: 'center',
+                              flexShrink: 0,
+                            }}
+                          >
+                            <Package size={20} color={isDark ? '#60A5FA' : '#2563EB'} />
+                          </div>
                           <div>
                             <div style={{ fontSize: 13, fontWeight: 700, color: isDark ? '#FFF' : '#111827' }}>{p.title}</div>
                             <div style={{ fontSize: 11, color: '#9CA3AF' }}>
@@ -947,7 +1320,31 @@ export const AdminCatalogManagementView: React.FC = () => {
               <button type="button" aria-label="Close product details" onClick={() => setSelectedProduct(null)} style={{ border: 0, borderRadius: 9, width: 34, height: 34, display: 'grid', placeItems: 'center', background: isDark ? 'rgba(255,255,255,.08)' : '#F1F5F9', color: '#94A3B8', cursor: 'pointer' }}><X size={17} /></button>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '160px minmax(0,1fr)', gap: 18, marginTop: 20 }}>
-              <img src={selectedProduct.images?.[0] || selectedProduct.image || PRODUCT_IMAGE_FALLBACK} alt={selectedProduct.title} onError={(event) => { event.currentTarget.src = PRODUCT_IMAGE_FALLBACK; }} style={{ width: 160, height: 160, borderRadius: 12, objectFit: 'cover', background: '#E2E8F0' }} />
+              {selectedProduct.images?.[0] || selectedProduct.image ? (
+                <img
+                  src={formatProductImageUrl(selectedProduct.images?.[0] || selectedProduct.image)}
+                  alt={selectedProduct.title}
+                  onError={(event) => {
+                    event.currentTarget.style.display = 'none';
+                    const next = event.currentTarget.nextElementSibling as HTMLElement;
+                    if (next) next.style.display = 'grid';
+                  }}
+                  style={{ width: 160, height: 160, borderRadius: 12, objectFit: 'cover', background: isDark ? '#1E293B' : '#F1F5F9' }}
+                />
+              ) : null}
+              <div
+                style={{
+                  width: 160,
+                  height: 160,
+                  borderRadius: 12,
+                  background: isDark ? 'rgba(30,41,59,.8)' : '#EFF6FF',
+                  border: `1px solid ${isDark ? 'rgba(59,130,246,.25)' : '#DBEAFE'}`,
+                  display: selectedProduct.images?.[0] || selectedProduct.image ? 'none' : 'grid',
+                  placeItems: 'center',
+                }}
+              >
+                <Package size={48} color={isDark ? '#60A5FA' : '#2563EB'} />
+              </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: 10 }}>
                 {[['Supplier', selectedProduct.supplierName], ['Brand', selectedProduct.brand || 'KFPCL'], ['Stock', `${selectedProduct.stock} ${selectedProduct.unit || 'units'}`], ['MOQ', `${selectedProduct.moq} ${selectedProduct.unit || 'units'}`], ['GST rate', `${selectedGstRate}% · ${selectedGstCompliant ? 'Verified' : 'Needs review'}`], ['Status', formatProductStatus(selectedProduct.status)]].map(([label, value]) => <div key={label} style={{ background: isDark ? 'rgba(30,41,59,.72)' : '#F8FAFC', borderRadius: 10, padding: 11 }}><small style={{ display: 'block', color: '#94A3B8', fontSize: 10 }}>{label}</small><strong style={{ display: 'block', marginTop: 5, fontSize: 13 }}>{value}</strong></div>)}
               </div>
@@ -1007,7 +1404,11 @@ export const AdminCatalogManagementView: React.FC = () => {
                   <select
                     required
                     value={productForm.categoryId}
-                    onChange={(e) => setProductForm({ ...productForm, categoryId: e.target.value, subcategoryId: '' })}
+                    onChange={(e) => {
+                      const newCatId = e.target.value;
+                      setProductForm({ ...productForm, categoryId: newCatId, subcategoryId: '' });
+                      if (newCatId) fetchModalSubcategories(newCatId);
+                    }}
                     style={inputStyle}
                   >
                     <option value="">Select Category</option>
@@ -1021,10 +1422,22 @@ export const AdminCatalogManagementView: React.FC = () => {
                   <select
                     disabled={!productForm.categoryId}
                     value={productForm.subcategoryId}
+                    onFocus={() => {
+                      if (productForm.categoryId) fetchModalSubcategories(productForm.categoryId);
+                    }}
+                    onClick={() => {
+                      if (productForm.categoryId) fetchModalSubcategories(productForm.categoryId);
+                    }}
                     onChange={(e) => setProductForm({ ...productForm, subcategoryId: e.target.value })}
                     style={{ ...inputStyle, cursor: productForm.categoryId ? 'pointer' : 'not-allowed', opacity: productForm.categoryId ? 1 : 0.65 }}
                   >
-                    <option value="">{productForm.categoryId ? 'Select Subcategory' : 'Select Category First'}</option>
+                    <option value="">
+                      {modalLoadingSubs
+                        ? 'Loading subcategories…'
+                        : productForm.categoryId
+                        ? 'Select Subcategory'
+                        : 'Select Category First'}
+                    </option>
                     {getAvailableSubcategories(productForm.categoryId).map((sub) => (
                       <option key={sub.id} value={sub.id}>{sub.name}</option>
                     ))}
@@ -1246,4 +1659,3 @@ export const AdminCatalogManagementView: React.FC = () => {
     </div>
   );
 };
-

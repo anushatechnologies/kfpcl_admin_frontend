@@ -117,7 +117,7 @@ interface AdminState {
 
   // Dynamic Data & Collections
   categories: PlatformCategory[];
-  setCategories: (categories: PlatformCategory[]) => void;
+  setCategories: (categories: PlatformCategory[] | ((prev: PlatformCategory[]) => PlatformCategory[])) => void;
   addCategory: (cat: Omit<PlatformCategory, 'id'>) => void;
   updateCategory: (id: string, changes: Partial<Omit<PlatformCategory, 'id'>>) => void;
   deleteCategory: (id: string) => void;
@@ -190,6 +190,78 @@ const getInitialTheme = (): 'light' | 'dark' => {
   return saved === 'light' ? 'light' : 'dark';
 };
 
+const ADMIN_AUTH_STORAGE_KEY = 'kfpl_admin_auth';
+const ADMIN_USER_STORAGE_KEY = 'kfpl_admin_user';
+const ADMIN_SECTION_STORAGE_KEY = 'kfpl_admin_section';
+const ADMIN_SUBSECTION_STORAGE_KEY = 'kfpl_admin_subsection';
+
+const getInitialAdminAuth = (): boolean => {
+  try {
+    const saved = localStorage.getItem(ADMIN_AUTH_STORAGE_KEY);
+    return saved === 'true';
+  } catch {
+    return false;
+  }
+};
+
+const getInitialAdminUser = (): AdminAuthUser | null => {
+  try {
+    const saved = localStorage.getItem(ADMIN_USER_STORAGE_KEY);
+    return saved ? JSON.parse(saved) : null;
+  } catch {
+    return null;
+  }
+};
+
+const getInitialSectionFromUrl = (): { section: AdminTopSection; subSection: AdminSubSection } => {
+  try {
+    if (typeof window !== 'undefined' && window.location) {
+      const pathname = window.location.pathname.replace(/\/$/, '') || '/admin/dashboard';
+      const catalogRoutes: Record<string, AdminSubSection> = {
+        '/admin/categories': 'CATALOG_CATEGORIES',
+        '/admin/catalog/categories': 'CATALOG_CATEGORIES',
+        '/admin/subcategories': 'CATALOG_SUBCATEGORIES',
+        '/admin/catalog/subcategories': 'CATALOG_SUBCATEGORIES',
+        '/admin/products': 'CATALOG_PRODUCTS',
+        '/admin/catalog/products': 'CATALOG_PRODUCTS',
+        '/admin/add-product': 'CATALOG_ADD_PRODUCT',
+        '/admin/catalog/add-product': 'CATALOG_ADD_PRODUCT',
+      };
+      if (catalogRoutes[pathname]) {
+        return { section: 'CATALOG_MGMT', subSection: catalogRoutes[pathname] };
+      }
+      const sections: Record<string, AdminTopSection> = {
+        '/admin/dashboard': 'DASHBOARD',
+        '/admin/users': 'USER_MGMT',
+        '/admin/sellers': 'SELLER_MGMT',
+        '/admin/buyers': 'BUYER_MGMT',
+        '/admin/orders': 'ORDER_MGMT',
+        '/admin/rfqs': 'RFQ_MGMT',
+        '/admin/inventory': 'INVENTORY',
+        '/admin/payments': 'PAYMENTS',
+        '/admin/reviews': 'REVIEWS',
+        '/admin/support': 'SUPPORT',
+        '/admin/notifications': 'NOTIFICATIONS',
+        '/admin/analytics': 'ANALYTICS',
+        '/admin/settings': 'SETTINGS',
+      };
+      if (sections[pathname]) {
+        return { section: sections[pathname], subSection: 'ROOT' };
+      }
+    }
+    const savedSec = localStorage.getItem(ADMIN_SECTION_STORAGE_KEY) as AdminTopSection | null;
+    const savedSub = localStorage.getItem(ADMIN_SUBSECTION_STORAGE_KEY) as AdminSubSection | null;
+    if (savedSec) {
+      return { section: savedSec, subSection: savedSub || 'ROOT' };
+    }
+  } catch {
+    // fallback
+  }
+  return { section: 'DASHBOARD', subSection: 'ROOT' };
+};
+
+const initialNav = getInitialSectionFromUrl();
+
 export const useAdminStore = create<AdminState>((set, get) => ({
   theme: getInitialTheme(),
   toggleTheme: () => {
@@ -197,8 +269,8 @@ export const useAdminStore = create<AdminState>((set, get) => ({
     localStorage.setItem('kfpl_theme', nextTheme);
     set({ theme: nextTheme });
   },
-  isAdminAuthenticated: false,
-  adminUser: null,
+  isAdminAuthenticated: getInitialAdminAuth(),
+  adminUser: getInitialAdminUser(),
 
   login: (email, _password, customUser) => {
     const user: AdminAuthUser = {
@@ -209,6 +281,10 @@ export const useAdminStore = create<AdminState>((set, get) => ({
       department: customUser?.department || 'Executive Management',
       avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
     };
+    try {
+      localStorage.setItem(ADMIN_AUTH_STORAGE_KEY, 'true');
+      localStorage.setItem(ADMIN_USER_STORAGE_KEY, JSON.stringify(user));
+    } catch {}
     set({ isAdminAuthenticated: true, adminUser: user });
     return true;
   },
@@ -222,23 +298,48 @@ export const useAdminStore = create<AdminState>((set, get) => ({
       department: userData.department,
       avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
     };
+    try {
+      localStorage.setItem(ADMIN_AUTH_STORAGE_KEY, 'true');
+      localStorage.setItem(ADMIN_USER_STORAGE_KEY, JSON.stringify(newUser));
+    } catch {}
     set({ isAdminAuthenticated: true, adminUser: newUser });
     return true;
   },
 
   logout: () => {
+    try {
+      localStorage.removeItem(ADMIN_AUTH_STORAGE_KEY);
+      localStorage.removeItem(ADMIN_USER_STORAGE_KEY);
+      localStorage.removeItem(ADMIN_SECTION_STORAGE_KEY);
+      localStorage.removeItem(ADMIN_SUBSECTION_STORAGE_KEY);
+    } catch {}
     set({ isAdminAuthenticated: false, adminUser: null, activeSection: 'DASHBOARD', activeSubSection: 'ROOT' });
   },
-  updateAdminUser: (changes) => set((state) => ({ adminUser: state.adminUser ? { ...state.adminUser, ...changes } : state.adminUser })),
+  updateAdminUser: (changes) => set((state) => {
+    const updatedUser = state.adminUser ? { ...state.adminUser, ...changes } : state.adminUser;
+    if (updatedUser) {
+      try {
+        localStorage.setItem(ADMIN_USER_STORAGE_KEY, JSON.stringify(updatedUser));
+      } catch {}
+    }
+    return { adminUser: updatedUser };
+  }),
 
-  activeSection: 'DASHBOARD',
-  activeSubSection: 'ROOT',
+  activeSection: initialNav.section,
+  activeSubSection: initialNav.subSection,
 
   setActiveSection: (section, subSection = 'ROOT') => {
+    try {
+      localStorage.setItem(ADMIN_SECTION_STORAGE_KEY, section);
+      localStorage.setItem(ADMIN_SUBSECTION_STORAGE_KEY, subSection);
+    } catch {}
     set({ activeSection: section, activeSubSection: subSection });
   },
 
   setActiveSubSection: (subSection) => {
+    try {
+      localStorage.setItem(ADMIN_SUBSECTION_STORAGE_KEY, subSection);
+    } catch {}
     set({ activeSubSection: subSection });
   },
 
@@ -257,7 +358,13 @@ export const useAdminStore = create<AdminState>((set, get) => ({
   },
 
   categories: INITIAL_CATEGORIES,
-  setCategories: (categories) => set({ categories }),
+  setCategories: (categories) =>
+    set((state) => {
+      const updated = typeof categories === 'function' ? categories(state.categories || []) : categories;
+      const safeCategories = Array.isArray(updated) ? updated : [];
+      persistCategories(safeCategories);
+      return { categories: safeCategories };
+    }),
 
   addCategory: (newCat) => {
     const cat: PlatformCategory = {
