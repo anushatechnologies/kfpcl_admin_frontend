@@ -1,0 +1,287 @@
+import { useRef, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { ChevronLeft, ChevronRight, LogOut, User } from 'lucide-react';
+import { Tooltip, Avatar, Divider, Menu, MenuItem } from '@mui/material';
+import { useAppDispatch, useAppSelector } from '@app/hooks';
+import { getStoredRefreshToken } from '@features/auth/authCookies';
+import { logoutUser } from '@features/auth/authSlice';
+import { Logo } from '@assets/index';
+import { RouteLinks } from '@routes/utils';
+import { motion } from 'framer-motion';
+
+const SIDEBAR_W = 284;
+const COLLAPSED_W = 84;
+
+const SideNav = () => {
+  const location = useLocation();
+  const navRef = useRef<HTMLElement | null>(null);
+  const [collapsed, setCollapsed] = useState(false);
+  const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+  const dispatch = useAppDispatch();
+  const navigate = useNavigate();
+  const user = useAppSelector((s) => s.auth.user);
+  const isLoggedIn = useAppSelector((s) => s.auth.isLoggedIn);
+
+  if (!isLoggedIn) return null;
+
+  const handleLogout = async () => {
+    const refreshToken = getStoredRefreshToken();
+    if (refreshToken) {
+      try {
+        await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/auth/adminpanel/logout`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify({ refreshToken }),
+        });
+      } catch {
+        // Best effort logout — local cleanup still proceeds.
+      }
+    }
+
+    dispatch(logoutUser());
+    setAnchorEl(null);
+    navigate('/login', { replace: true });
+  };
+
+  const avatarLetter = user?.email?.[0]?.toUpperCase() ?? 'A';
+  const displayName = user?.name?.trim() || user?.email?.split('@')[0] || 'Admin';
+  const roleLabel =
+    user?.role === 'ROLE_SUPER_ADMIN'
+      ? 'Super Admin'
+      : user?.role === 'ROLE_ADMIN' || user?.role === 'ADMIN'
+        ? 'Admin'
+        : (user?.role ?? 'Admin');
+
+  return (
+    <motion.aside
+      animate={{ width: collapsed ? COLLAPSED_W : SIDEBAR_W }}
+      transition={{ duration: 0.22 }}
+      style={{
+        height: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        background: 'var(--color-sidebar)',
+        borderRight: '1px solid var(--color-sidebar-edge)',
+        boxShadow: 'var(--shadow-lg)',
+        position: 'sticky',
+        top: 0,
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          // Keep the collapse control above the logo when the rail is collapsed.
+          padding: collapsed ? '54px 18px 20px' : '24px 22px 20px',
+          borderBottom: '1px solid var(--color-sidebar-edge)',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 14,
+            justifyContent: collapsed ? 'center' : 'flex-start',
+          }}
+        >
+          <div
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: 12,
+              background: '#ffffff',
+              display: 'grid',
+              placeItems: 'center',
+              boxShadow: '0 8px 20px rgba(0,0,0,0.22)',
+              overflow: 'hidden',
+              padding: '2px',
+              flexShrink: 0,
+            }}
+          >
+            <img src={Logo} alt="KFPCL Logo" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: 10 }} />
+          </div>
+          {!collapsed && (
+            <div>
+              <div
+                style={{ color: 'var(--sidebar-title)', fontWeight: 800, fontSize: 18 }}
+                className="panel-title"
+              >
+                KFPCL Admin
+              </div>
+              <div style={{ color: 'var(--sidebar-subtitle)', fontSize: 12 }}>
+                Operations Console
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <button
+        onClick={() => setCollapsed((value) => !value)}
+        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        style={{
+          position: 'absolute',
+          top: collapsed ? 10 : 24,
+          right: collapsed ? 8 : 12,
+          width: 30,
+          height: 30,
+          borderRadius: 999,
+          border: '1px solid var(--color-border)',
+          background: 'rgba(255,255,255,0.08)',
+          color: 'var(--color-text-muted)',
+          display: 'grid',
+          placeItems: 'center',
+          cursor: 'pointer',
+          backdropFilter: 'blur(12px)',
+        }}
+      >
+        {collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+      </button>
+
+      <nav ref={navRef} style={{ flex: 1, overflowY: 'auto', padding: '16px 10px 10px' }}>
+        {RouteLinks.map((group) => {
+          const visibleLinks = group.links.filter(
+            (link) => !link.roles || (user?.role && link.roles.includes(user.role)),
+          );
+          if (!visibleLinks.length) return null;
+
+          return (
+            <div key={group.section} style={{ marginBottom: 14 }}>
+              {!collapsed && (
+                <div
+                  style={{
+                    padding: '10px 12px',
+                    color: 'var(--nav-section)',
+                    fontSize: 11,
+                    fontWeight: 800,
+                    letterSpacing: '0.12em',
+                    textTransform: 'uppercase',
+                  }}
+                >
+                  {group.section}
+                </div>
+              )}
+
+              {visibleLinks.map(({ path, name, Icon }) => {
+                const isActive =
+                  location.pathname === path || location.pathname.startsWith(path + '/');
+                return (
+                  <Tooltip key={name} title={collapsed ? name : ''} placement="right">
+                    <Link to={path} style={{ textDecoration: 'none', display: 'block' }}>
+                      <div
+                        style={{
+                          margin: '4px 0',
+                          padding: collapsed ? '14px 0' : '14px 14px',
+                          borderRadius: 18,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: collapsed ? 'center' : 'flex-start',
+                          gap: 12,
+                          color: isActive ? 'var(--nav-active-text)' : 'var(--nav-text)',
+                          background: isActive ? 'var(--nav-active-bg)' : 'transparent',
+                          border: isActive
+                            ? '1px solid var(--color-sidebar-edge)'
+                            : '1px solid transparent',
+                          boxShadow: isActive ? '0 18px 28px rgba(79,70,229,0.18)' : 'none',
+                          transition: 'all 0.18s ease',
+                        }}
+                        onMouseEnter={(event) => {
+                          if (!isActive) {
+                            event.currentTarget.style.background = 'var(--nav-hover-bg)';
+                          }
+                        }}
+                        onMouseLeave={(event) => {
+                          if (!isActive) {
+                            event.currentTarget.style.background = 'transparent';
+                          }
+                        }}
+                      >
+                        <Icon fontSize="small" sx={{ fontSize: 18 }} />
+                        {!collapsed && (
+                          <span style={{ fontSize: 14, fontWeight: isActive ? 700 : 600 }}>
+                            {name}
+                          </span>
+                        )}
+                      </div>
+                    </Link>
+                  </Tooltip>
+                );
+              })}
+            </div>
+          );
+        })}
+      </nav>
+
+      <div
+        style={{
+          margin: 12,
+          padding: 14,
+          borderRadius: 22,
+          border: '1px solid var(--sidebar-user-border)',
+          background:
+            'linear-gradient(180deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.04) 100%)',
+          backdropFilter: 'blur(14px)',
+        }}
+      >
+        <div
+          onClick={(event) => setAnchorEl(event.currentTarget)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            cursor: 'pointer',
+            justifyContent: collapsed ? 'center' : 'flex-start',
+          }}
+        >
+          <Avatar
+            sx={{ width: 40, height: 40, background: 'var(--color-accent-grad)', fontWeight: 800 }}
+          >
+            {avatarLetter}
+          </Avatar>
+          {!collapsed && (
+            <div style={{ minWidth: 0 }}>
+              <div
+                style={{
+                  color: 'var(--sidebar-title)',
+                  fontWeight: 700,
+                  fontSize: 14,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {displayName}
+              </div>
+              <div style={{ color: 'var(--sidebar-subtitle)', fontSize: 12 }}>{roleLabel}</div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <Menu
+        anchorEl={anchorEl}
+        open={Boolean(anchorEl)}
+        onClose={() => setAnchorEl(null)}
+        PaperProps={{ sx: { minWidth: 220, borderRadius: 3 } }}
+      >
+        <MenuItem
+          onClick={() => {
+            setAnchorEl(null);
+            navigate('/profile');
+          }}
+          sx={{ gap: 1.5 }}
+        >
+          <User size={15} /> Profile
+        </MenuItem>
+        <Divider />
+        <MenuItem onClick={handleLogout} sx={{ gap: 1.5, color: 'error.main' }}>
+          <LogOut size={15} /> Sign out
+        </MenuItem>
+      </Menu>
+    </motion.aside>
+  );
+};
+
+export default SideNav;
